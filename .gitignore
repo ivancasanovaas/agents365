@@ -62,3 +62,15 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# -- team additions (hackathon workspace) ------------------------------------------------------
+outputs/
+runs/
+*.ipynb_checkpoints/
+.claude/settings.local.json
+*.parquet
+*.npy
+*.npz
+*.pkl
+
+ext_open/

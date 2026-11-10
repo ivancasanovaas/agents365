@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./data/**)",
+      "Grep(./data/**)",
+      "Glob(./data/**)",
+      "Read(./**/*_atd.txt)",
+      "Read(./**/*_atd.xml)",
+      "Read(./**/*_smart_tagging.xml)",
+      "Read(./**/*_homography.csv)",
+      "Read(./**/*.mp4)",
+      "Read(./evaluation/gt/**)",
+      "Read(./evaluation/reports/**)",
+      "Grep(./evaluation/reports/**)",
+      "Bash(*evaluation/reports*)",
+      "Bash(cat *data*)",
+      "Bash(head *data*)",
+      "Bash(tail *data*)",
+      "Bash(less *data*)",
+      "Bash(more *data*)",
+      "Bash(type *data*)",
+      "Bash(Get-Content *data*)",
+      "Bash(gc *data*)",
+      "Bash(grep *data*)",
+      "Bash(rg *data*)",
+      "Bash(Select-String *data*)",
+      "Bash(xxd *data*)",
+      "Bash(strings *data*)",
+      "Bash(ls *data*)",
+      "Bash(dir *data*)",
+      "Bash(Get-ChildItem *data*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/block_data_access.py"
+          }
+        ]
+      }
+    ]
+  }
+}
