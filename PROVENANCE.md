@@ -18,4 +18,6 @@ provided game with no human labels. Not allowed: eyeballing the video, tuning on
 | HMM transition, emission tables | estimated | Supervised counts on EXTERNAL labels (Metrica Game 3, events-derived), cross-fitted by half; never on the competition match or its public GT | src/model/hmm.py | 2026-11 |
 | DIST_EDGES / SPEED_EDGES / LAG | 1,2,4,8 m / 0.5,2,6,12 m/s / 5 frames | ASSUMPTION (coarse buckets, not tuned) | hmm.py | 2026-11 |
 | HMM temp | 0.3 (candidate) | Chosen on a sweep over EXTERNAL Game 3 only (provisional, one game) | hmm.py | 2026-11 |
+| Local LLM (analysis assistant only, never labels frames) | Ollama 0.40.3, model `qwen3.8:27b`, ID aaee06c39dcf (17 GB) | Open model pulled via Ollama on the DGX Spark; own instance bound to 127.0.0.1:11435, no cloud, no API keys. Used to propose features/code from aggregate profiles; every threshold it suggests still needs its own row here | DGX Spark (not in repo) | 2026-11-11 |
+| Reporting levels in the profile: 10/20/30/40 m/s, 0.5 m/s (ball and crowd stillness), 1 s min run, 2 m near-line | descriptive values | NOT model constants: used only to describe the data in outputs/profile.md; none feeds the pipeline. If promoted to a feature threshold they need their own origin row | src/profile_datasets.py | 2026-11-11 |
 | NOISE_BAND | 0.04 | possession_metrics.SPELL_NOISE_BAND | run_exp001.py | 2026-11 |

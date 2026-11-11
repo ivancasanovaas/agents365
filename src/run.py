@@ -44,7 +44,7 @@ def write_csv(path, codes) -> None:
 
 
 def summarise(codes) -> str:
-    counts = {l: int((codes == i).sum()) for i, l in enumerate(LETTERS)}
+    counts = {str(l): int((codes == i).sum()) for i, l in enumerate(LETTERS)}
     alive = np.where(codes <= 1, codes, -1)
     changes = int(((alive[1:] != alive[:-1]) & (alive[1:] >= 0) & (alive[:-1] >= 0)).sum())
     return "label counts {} | H<->A switches {}".format(counts, changes)
