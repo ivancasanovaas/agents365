@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Blocks commits that stage competition data or derived frame-level exports.
+# Install (once per clone):  git config core.hooksPath scripts/hooks
+set -u
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$staged" ] && exit 0
+
+bad=""
+while IFS= read -r f; do
+  case "$f" in
+    data/README.md) continue ;;
+    data/*|*/data/*) bad="$bad\n  $f  (inside data/)" ;;
+    *.parquet|*.feather|*.mp4|*.avi|*.mkv|*.npy|*.npz|*.pkl|*.pl3container|*.gzip) bad="$bad\n  $f  (data/derived format)" ;;
+    *_atd.txt|*_atd.xml|*_homography.csv|*_smart_tagging.xml) bad="$bad\n  $f  (competition asset)" ;;
+    *_possession_gt.csv|*_possession_gt_meta.json|*_possession_gt_reference.csv) bad="$bad\n  $f  (private ground truth)" ;;
+    outputs/*|runs/*) bad="$bad\n  $f  (generated output)" ;;
+    evaluation/reports/*|evaluation/scoreboard.csv) bad="$bad\n  $f  (our predictions' reports)" ;;
+  esac
+done <<EOF
+$staged
+EOF
+
+if [ -n "$bad" ]; then
+  printf 'COMMIT BLOCKED: staged files that must never enter git:%b\n' "$bad" >&2
+  echo "Unstage them (git restore --staged <file>) and add the pattern to .gitignore if missing." >&2
+  exit 1
+fi
+exit 0
