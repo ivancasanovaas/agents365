@@ -21,7 +21,6 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .external.baseline import nearest_player
 from .external.common import FPS, PITCH_M, REPO_ROOT, Tracking
 
 QS = (0.10, 0.50, 0.90, 0.99)
@@ -196,12 +195,23 @@ def stillness_section(tr: Tracking, runs, g) -> Section:
 
 
 def proximity_section(tr: Tracking, g) -> Section:
-    _, dist = nearest_player(tr)
-    d = dist[g & np.isfinite(dist)]
+    diff = tr.players - tr.ball[:, None, :]
+    dist = np.sqrt((diff ** 2).sum(-1))
+    dist[np.isnan(dist)] = np.inf
+    idx = dist.argmin(axis=1)
+    best = dist[np.arange(len(dist)), idx]
+    ok = g & np.isfinite(best)
+    d = best[ok]
+    pos = tr.players[np.arange(len(dist)), idx]
+    length, width = PITCH_M
+    off = (pos[:, 0] < 0) | (pos[:, 0] > length) | (pos[:, 1] < 0) | (pos[:, 1] > width)
     lines = [
         "nearest-player distance (m), visible-ball graded frames: {}".format(_quant(d)),
         "share farther than 4 m: {} | farther than 8 m: {}".format(
             _pct((d > 4).sum(), d.size), _pct((d > 8).sum(), d.size)),
+        "nearest tracked object is OUTSIDE the pitch rectangle: {} of visible-ball graded frames".format(
+            _pct((off & ok).sum(), ok.sum())),
+        "... and within 4 m of the ball: {}".format(_pct((off & ok & (best <= 4.0)).sum(), ok.sum())),
     ]
     return "Ball-player proximity", lines
 
@@ -259,6 +269,111 @@ def tagging_section(events: Sequence[dict], n: int, g) -> Section:
     return "Smart Tagging", lines
 
 
+def _crowd_speed(tr: Tracking) -> np.ndarray:
+    """Median over visible slots of the per-frame speed (m/s); NaN where nothing is measurable."""
+    disp = np.linalg.norm(np.diff(tr.players, axis=0), axis=2) * FPS
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        med = np.nanmedian(disp, axis=1)
+    return np.concatenate((med, [np.nan]))
+
+
+def _cue_starts(tr: Tracking, runs) -> Dict[str, np.ndarray]:
+    """Start frames of three physical dead-ball cues. Used only to describe alignment."""
+    length, width = PITCH_M
+    visible = np.isfinite(tr.ball[:, 0])
+    x, y = tr.ball[:, 0], tr.ball[:, 1]
+    outside = visible & ((x < 0) | (x > length) | (y < 0) | (y > width))
+    o_start, _ = _runs_in_graded(outside, runs)
+    m_start, _ = _runs_in_graded(~visible, runs)
+    m_start = m_start[m_start > 0]
+    last = tr.ball[m_start - 1]
+    ok = np.isfinite(last[:, 0])
+    near = np.zeros(len(m_start), dtype=bool)
+    near[ok] = _dist_to_edge(last[ok]) <= EDGE_NEAR_M
+    crowd = _crowd_speed(tr)
+    c_start, c_len = _runs_in_graded(np.isfinite(crowd) & (crowd < STILL_CROWD_MS), runs)
+    c_start = c_start[c_len >= int(round(MIN_STILL_S * FPS))]
+    return {"ball outside pitch": o_start, "gap after near-line ball": m_start[near], "crowd still": c_start}
+
+
+def alignment_section(tr: Tracking, runs, events: Sequence[dict], g) -> Section:
+    """How Smart Tagging set pieces line up with physical cues. Signed offsets in seconds, aggregates only."""
+    sp = np.array(sorted(ev["start_frame"] for ev in events
+                         if str(ev.get("code")).strip().lower() == "set pieces"
+                         and "kick off" not in str(ev.get("tags", {}).get("Type")).lower()), dtype=np.int64)
+    lines = ["set pieces considered (kick offs excluded): {}".format(len(sp))]
+    if sp.size == 0:
+        return "Set piece alignment", lines
+    win = 10 * FPS
+    for name, starts in _cue_starts(tr, runs).items():
+        starts = np.sort(starts)
+        if starts.size == 0:
+            lines.append("cue {}: n=0".format(name))
+            continue
+        pos = np.searchsorted(starts, sp)
+        left = starts[np.clip(pos - 1, 0, starts.size - 1)]
+        right = starts[np.clip(pos, 0, starts.size - 1)]
+        nearest = np.where(np.abs(left - sp) <= np.abs(right - sp), left, right)
+        off = (nearest - sp) / FPS
+        hit = np.abs(off) <= 10.0
+        in_window = np.zeros(starts.size, dtype=bool)
+        for s in sp:
+            in_window |= (starts >= s - win) & (starts <= s + 35 * FPS)
+        lines.append("cue {}: n={} | set pieces with a cue within +-10 s: {} ({} of {}) | signed offset cue-minus-tag (s) {}".format(
+            name, starts.size, _pct(hit.sum(), sp.size), int(hit.sum()), sp.size, _quant(off[hit], digits=1)))
+        lines.append("cue {}: share of cues falling in [-10 s, +35 s] of some set-piece start: {}".format(
+            name, _pct(in_window.sum(), starts.size)))
+    return "Set piece alignment", lines
+
+
+def tag_consistency_section(events: Sequence[dict], codes: np.ndarray, g, home_key: str = "barcel") -> Section:
+    """Agreement between OUR labels and the tagged Team. Internal consistency, NOT accuracy."""
+    total = {}
+    match = {}
+    for ev in events:
+        team = str(ev.get("tags", {}).get("Team")).strip().lower()
+        if team == "n/a" or team == "none":
+            continue
+        side = 0 if team.startswith(home_key) else 1
+        lo, hi = max(0, ev["start_frame"]), min(len(codes), ev["end_frame"])
+        seg = codes[lo:hi]
+        gg = g[lo:hi] & (seg <= 1)
+        code = str(ev.get("code"))
+        total[code] = total.get(code, 0) + int(gg.sum())
+        match[code] = match.get(code, 0) + int(((seg == side) & gg).sum())
+    lines = ["overall agreement with tagged Team (frames where we say H or A): {}".format(
+        _pct(sum(match.values()), sum(total.values())))]
+    for code in sorted(total, key=lambda c: -total[c])[:8]:
+        lines.append("code {}: {} over {} frames".format(code, _pct(match[code], total[code]), total[code]))
+    return "Our labels vs tagged Team (consistency only)", lines
+
+
+def d_overlap_section(tr: Tracking, runs, events: Optional[Sequence[dict]], codes: np.ndarray, g) -> Section:
+    is_d = codes == 2
+    length, width = PITCH_M
+    x, y = tr.ball[:, 0], tr.ball[:, 1]
+    outside = np.isfinite(x) & ((x < 0) | (x > length) | (y < 0) | (y > width))
+    crowd = _crowd_speed(tr)
+    crowd_still = np.zeros(tr.n_frames, dtype=bool)
+    c_start, c_len = _runs_in_graded(np.isfinite(crowd) & (crowd < STILL_CROWD_MS), runs)
+    for a, ln in zip(c_start, c_len):
+        if ln >= int(round(MIN_STILL_S * FPS)):
+            crowd_still[a:a + ln] = True
+    lines = [
+        "share of frames with ball outside pitch that we label D: {}".format(_pct((is_d & outside & g).sum(), (outside & g).sum())),
+        "share of crowd-still frames that we label D: {}".format(_pct((is_d & crowd_still & g).sum(), (crowd_still & g).sum())),
+    ]
+    if events is not None:
+        sp = np.zeros(tr.n_frames, dtype=bool)
+        for ev in events:
+            if str(ev.get("code")).strip().lower() == "set pieces":
+                sp[max(0, ev["start_frame"]):min(tr.n_frames, ev["end_frame"])] = True
+        lines.append("share of set-piece-interval graded frames that we label D: {}".format(_pct((is_d & sp & g).sum(), (sp & g).sum())))
+        lines.append("share of our graded D frames inside a set-piece interval: {}".format(_pct((is_d & sp & g).sum(), (is_d & g).sum())))
+    return "Our D vs physical cues", lines
+
+
 def submission_section(codes: np.ndarray, g) -> Section:
     """Aggregates of OUR OWN output (H=0 A=1 D=2 X=3). Counts and durations only."""
     lines = []
@@ -290,8 +405,13 @@ def build_profile(tr: Tracking, runs: Sequence[Tuple[int, int]], events: Optiona
     ]
     if events is not None:
         sections.append(tagging_section(events, tr.n_frames, g))
+        sections.append(alignment_section(tr, runs, events, g))
     if codes is not None:
-        sections.append(submission_section(np.asarray(codes), g))
+        codes = np.asarray(codes)
+        sections.append(submission_section(codes, g))
+        sections.append(d_overlap_section(tr, runs, events, codes, g))
+        if events is not None:
+            sections.append(tag_consistency_section(events, codes, g))
     return sections
 
 

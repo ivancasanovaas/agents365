@@ -72,6 +72,19 @@ class ProfileTests(unittest.TestCase):
         still = [l for l in self.text.splitlines() if l.startswith("- ball stationary")]
         self.assertTrue(still and "count=0" not in still[0])
 
+    def test_new_diagnostic_sections(self):
+        for title in ("Set piece alignment", "Our D vs physical cues",
+                      "Our labels vs tagged Team (consistency only)"):
+            self.assertIn("## " + title, self.text)
+        self.assertIn("nearest tracked object is OUTSIDE the pitch rectangle", self.text)
+
+    def test_alignment_sees_a_planted_cue(self):
+        # the planted outside-pitch run starts at frame 1000; a set piece starting at 1010 must match it
+        events = [{"code": "SET PIECES", "start_frame": 1010, "end_frame": 1800, "tags": {"Team": "N/A", "Type": "Throw-in"}}]
+        text = render(build_profile(self.tr, self.runs, events))
+        line = [l for l in text.splitlines() if l.startswith("- cue ball outside pitch: n=") and "within +-10 s" in l][0]
+        self.assertIn("(1 of 1)", line)
+
     def test_no_raw_values_leak(self):
         # no coordinate-like lists and no frame-index lists: every number sits next to a label
         for line in self.text.splitlines():
