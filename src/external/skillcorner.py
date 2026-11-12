@@ -43,7 +43,7 @@ def _interp(values: np.ndarray, n_out: int) -> np.ndarray:
 def load_match(match_id: str = DEFAULT_MATCH, data_dir: Path = None):
     """-> (Tracking at 25 fps, gt_codes, info). Codes follow possession_metrics (H0 A1 D2 X3)."""
     data_dir = Path(data_dir) if data_dir else default_dir(match_id)
-    meta = json.loads((data_dir / "{}_match.json".format(match_id)).read_text())
+    meta = json.loads((data_dir / "{}_match.json".format(match_id)).read_text(encoding="utf-8"))
     home_id, away_id = meta["home_team"]["id"], meta["away_team"]["id"]
     team_of_player = {p["id"]: (0 if p["team_id"] == home_id else 1)
                       for p in meta["players"] if p.get("team_id") in (home_id, away_id)}
@@ -51,7 +51,7 @@ def load_match(match_id: str = DEFAULT_MATCH, data_dir: Path = None):
     centre = np.array(pitch) / 2.0
 
     frames, period, ball, rows = [], [], [], []
-    with open(data_dir / "{}_tracking_extrapolated.jsonl".format(match_id)) as f:
+    with open(data_dir / "{}_tracking_extrapolated.jsonl".format(match_id), encoding="utf-8") as f:
         for line in f:
             o = json.loads(line)
             frames.append(o["frame"])

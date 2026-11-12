@@ -31,7 +31,7 @@ def _write(dirpath: Path, n=40):
                     row += [0.5, 0.5]
                 w.writerow(row)
     tracking("Home", True)
-    tracking("Away", False)
+    tracking("Away", True)          # the real Away file also ends with the ball columns
     with open(dirpath / "{}_RawEventsData.csv".format(stem), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["Team", "Type", "Subtype", "Period", "Start Frame", "Start Time [s]", "End Frame", "End Time [s]",
@@ -53,7 +53,7 @@ class MetricaCsvTests(unittest.TestCase):
         self.assertEqual(tr.slot_team.tolist(), [0, 0, 1, 1])
         np.testing.assert_allclose(tr.ball[0], [52.5, 34.0])          # 0.5 * (105, 68)
         self.assertEqual(info["halves"], [(0, 20), (20, 40)])
-        self.assertTrue(np.isnan(tr.players[0, 1, 0]))                # NaN preserved
+        self.assertTrue(np.isnan(tr.players[0, 1, 1]))                # NaN preserved (Player2's y in the fixture)
         # kick off (home) -> home control from frame 0; pass by away at frame 9 (1-based 10) switches to away
         self.assertEqual(int(gt[2]), 0)
         self.assertEqual(int(gt[10]), 1)

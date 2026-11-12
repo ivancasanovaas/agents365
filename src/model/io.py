@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .frame_clf import FEATURE_NAMES, SoftmaxModel
 from .hmm import HmmParams
 
 
@@ -21,6 +22,24 @@ def save_params(path, params: HmmParams, meta: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+
+
+def save_softmax(path, model, meta: dict) -> None:
+    """Softmax emission model (EXP-010): weights, standardisation and class prior as small JSON."""
+    payload = {"meta": meta, "feature_names": list(FEATURE_NAMES), "W": model.W.tolist(), "mean": model.mean.tolist(),
+               "std": model.std.tolist(), "log_prior": model.log_prior.tolist()}
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+
+
+def load_softmax(path):
+    payload = json.loads(Path(path).read_text())
+    if payload["feature_names"] != list(FEATURE_NAMES):
+        raise ValueError("softmax params were fitted with a different feature set; refit with python -m src.fit_params")
+    model = SoftmaxModel(np.array(payload["W"]), np.array(payload["mean"]), np.array(payload["std"]),
+                         np.array(payload["log_prior"]))
+    return model, payload["meta"]
 
 
 def load_params(path):

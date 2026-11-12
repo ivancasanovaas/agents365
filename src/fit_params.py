@@ -1,12 +1,13 @@
-"""Fit the HMM on EXTERNAL games and save the parameters (no competition data involved).
+"""Fit the possession model on EXTERNAL games only and save its parameters (no competition data involved).
 
-    python -m src.fit_params            # needs ext_open/metrica_game3 and ext_open/skillcorner_* (see PROVENANCE.md)
+    python -m src.fit_params            # needs the games under ext_open/ (sources in PROVENANCE.md)
 
-The parameters are estimated by counting on the POOLED external games (Metrica Sample Game 3 + SkillCorner 1874553),
-each degraded with the profile-calibrated degrader. Pooling matters: some dead-ball cues (a ball outside the pitch for
-more than 2 s) have no training frames in Metrica alone (EXP-004 support report). Pooling cannot be validated
-leave-one-game-out with only two games; the single-game versions were validated by transfer (EXP-002/003/004).
-Writes models/hmm_params.json.
+Estimated on ALL available external games (Metrica Sample Games 1-3, SkillCorner open matches), each degraded with the
+profile-calibrated bench (seed 999):
+  - models/hmm_params.json      transition matrix and prior by counting (+ the naive-Bayes streams kept for reference);
+  - models/softmax_params.json  softmax emission model on frame features (EXP-010), trained on every 5th graded frame and
+                                its team-swapped copy.
+Leave-one-game-out validation of this exact recipe: python -m src.external.run_exp010.
 """
 from __future__ import annotations
 
@@ -16,39 +17,50 @@ import numpy as np
 
 from .external.common import REPO_ROOT
 from .external.degrade import calibrated_params, degrade
-from .external.metrica import load_game3
-from .external.skillcorner import load_match
+from .external.registry import available, load
+from .model.frame_clf import TRAIN_STRIDE, build_features, fit_softmax
 from .model.hmm import concat_evidence, extract_evidence, fit
-from .model.io import save_params
+from .model.io import save_params, save_softmax
 
 DEGRADE_SEED = 999
-STREAMS = ("out", "crowd")     # variant C of EXP-003 (kept by the fixed decision rule); absolute crowd edges (EXP-004)
+STREAMS = ("out", "crowd")      # naive-Bayes streams (variant C); the production emissions are the softmax model
+SWAP = np.array([1, 0, 2])
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(REPO_ROOT / "models" / "hmm_params.json"))
+    ap.add_argument("--hmm-out", default=str(REPO_ROOT / "models" / "hmm_params.json"))
+    ap.add_argument("--softmax-out", default=str(REPO_ROOT / "models" / "softmax_params.json"))
     args = ap.parse_args(argv)
 
     dparams = calibrated_params()
-    games = [("metrica_sample_game_3", load_game3()), ("skillcorner_1874553", load_match())]
-    evs, labels, sizes = [], [], {}
-    for name, (clean, gt, info) in games:
+    names = available()
+    if len(names) < 2:
+        raise SystemExit("need the external games under ext_open/ (see PROVENANCE.md); found: {}".format(names))
+    evs, gts, xs, xss, ys, sizes = [], [], [], [], [], {}
+    for name in names:
+        clean, gt, info = load(name)
         tr = degrade(clean, seed=DEGRADE_SEED, params=dparams)
+        X, Xs = build_features(tr, info["halves"], swap_too=True)
+        idx = np.flatnonzero(gt < 3)[::TRAIN_STRIDE]
         evs.append(extract_evidence(tr, streams=STREAMS))
-        labels.append(gt)
+        gts.append(gt)
+        xs.append(X[idx]); xss.append(Xs[idx]); ys.append(gt[idx].astype(np.int64))
         sizes[name] = int(info["n_frames"])
-    gt_all = np.concatenate(labels)
-    params = fit(concat_evidence(evs), gt_all, gt_all != 3)
-    meta = {
-        "source": "pooled external games (events/phases-derived labels): " + ", ".join(sizes),
-        "degrade_seed": DEGRADE_SEED,
-        "degrade_params": dparams.__dict__,
-        "streams": list(STREAMS),
-        "n_frames": sizes,
-    }
-    save_params(args.out, params, meta)
-    print("wrote {} (pooled {})".format(args.out, ", ".join("{}: {} frames".format(k, v) for k, v in sizes.items())))
+        print("prepared {} ({} frames)".format(name, info["n_frames"]))
+
+    gt_all = np.concatenate(gts)
+    hmm = fit(concat_evidence(evs), gt_all, gt_all != 3)
+    meta = {"source": "pooled external games (events/phases-derived labels): " + ", ".join(sizes),
+            "degrade_seed": DEGRADE_SEED, "degrade_params": dparams.__dict__, "streams": list(STREAMS),
+            "n_frames": sizes}
+    save_params(args.hmm_out, hmm, meta)
+
+    Xt = np.concatenate(xs + xss)
+    yt = np.concatenate(ys + [SWAP[y] for y in ys])
+    model = fit_softmax(Xt, yt)
+    save_softmax(args.softmax_out, model, dict(meta, train_rows=int(len(yt)), stride=TRAIN_STRIDE))
+    print("wrote {} and {} ({} games, {} training rows)".format(args.hmm_out, args.softmax_out, len(names), len(yt)))
 
 
 if __name__ == "__main__":
