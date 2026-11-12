@@ -10,12 +10,13 @@ from __future__ import annotations
 import argparse
 
 from .external.common import REPO_ROOT
-from .external.degrade import DegradeParams, degrade
+from .external.degrade import calibrated_params, degrade
 from .external.metrica import load_game3
 from .model.hmm import extract_evidence, fit
 from .model.io import save_params
 
 DEGRADE_SEED = 999
+STREAMS = ("out", "crowd")     # variant C of EXP-003 (kept by the fixed decision rule)
 
 
 def main(argv=None):
@@ -24,12 +25,14 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     clean, gt, info = load_game3()
-    tr = degrade(clean, seed=DEGRADE_SEED, params=DegradeParams())
-    params = fit(extract_evidence(tr), gt, gt != 3)
+    dparams = calibrated_params()
+    tr = degrade(clean, seed=DEGRADE_SEED, params=dparams)
+    params = fit(extract_evidence(tr, streams=STREAMS), gt, gt != 3)
     meta = {
         "source": "metrica_sample_game_3 (events-derived labels)",
         "degrade_seed": DEGRADE_SEED,
-        "degrade_params": DegradeParams().__dict__,
+        "degrade_params": dparams.__dict__,
+        "streams": list(STREAMS),
         "n_frames": info["n_frames"],
     }
     save_params(args.out, params, meta)

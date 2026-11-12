@@ -16,6 +16,7 @@ def save_params(path, params: HmmParams, meta: dict) -> None:
         "log_team": params.log_team.tolist(),
         "log_speed": params.log_speed.tolist(),
         "log_prior": params.log_prior.tolist(),
+        "log_extra": {k: v.tolist() for k, v in params.log_extra.items()},
     }
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,5 +30,6 @@ def load_params(path):
         log_team=np.array(payload["log_team"]),
         log_speed=np.array(payload["log_speed"]),
         log_prior=np.array(payload["log_prior"]),
+        log_extra={k: np.array(v) for k, v in payload.get("log_extra", {}).items()},
     )
     return params, payload["meta"]

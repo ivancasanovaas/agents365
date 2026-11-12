@@ -10,6 +10,12 @@ bad=""
 while IFS= read -r f; do
   case "$f" in
     data/README.md) continue ;;
+    *.ipynb)
+      # A notebook stores cell outputs: a df.head() would leave match rows inside the file. Refuse any with outputs.
+      py="$(command -v python3 || command -v python || true)"
+      if [ -n "$py" ] && ! git show ":$f" | "$py" -c 'import json,sys; nb=json.load(sys.stdin); sys.exit(1 if any(c.get("outputs") for c in nb.get("cells", [])) else 0)' 2>/dev/null; then
+        bad="$bad\n  $f  (notebook with outputs: jupyter nbconvert --clear-output --inplace $f)"
+      fi ;;
     data/*|*/data/*) bad="$bad\n  $f  (inside data/)" ;;
     *.parquet|*.feather|*.mp4|*.avi|*.mkv|*.npy|*.npz|*.pkl|*.pl3container|*.gzip) bad="$bad\n  $f  (data/derived format)" ;;
     *_atd.txt|*_atd.xml|*_homography.csv|*_smart_tagging.xml) bad="$bad\n  $f  (competition asset)" ;;

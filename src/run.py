@@ -25,11 +25,15 @@ LETTERS = np.array(["H", "A", "D", "X"])
 # Chosen on EXTERNAL games only (EXP-002 sweep, transfer Metrica -> SkillCorner); see PROVENANCE.md.
 TEMP = 0.3
 USE_SPEED = False
+# EXP-003 variant C: ball-outside-pitch and crowd-stillness streams, kept by the pre-registered rule.
+STREAMS = ("out", "crowd")
 
 
-def predict(tr: Tracking, params, runs, forced_dead, temp: float = TEMP, use_speed: bool = USE_SPEED):
+def predict(tr: Tracking, params, runs, forced_dead, temp: float = TEMP, use_speed: bool = USE_SPEED,
+            streams=STREAMS):
     """Pure function: Tracking -> int8 codes (H0 A1 D2 X3) of length n_frames."""
-    codes = decode(extract_evidence(tr), params, runs, temp=temp, use_speed=use_speed, fill=3)
+    codes = decode(extract_evidence(tr, streams=streams), params, runs, temp=temp, use_speed=use_speed,
+                   fill=3, streams=streams)
     for start, stop in forced_dead:
         codes[start:stop] = 2
     return codes

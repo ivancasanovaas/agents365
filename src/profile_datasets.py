@@ -336,6 +336,12 @@ def tag_consistency_section(events: Sequence[dict], codes: np.ndarray, g, home_k
         if team == "n/a" or team == "none":
             continue
         side = 0 if team.startswith(home_key) else 1
+        # In Smart Tagging, codes come in pairs over the same interval (e.g. PROGRESSION / DEFENDING IN MIDDLE
+        # THIRD); the Team of the DEFENDING* and DEFENSIVE TRANSITION codes is the defending side, so the
+        # possessing side is the other one.
+        code_name = str(ev.get("code")).strip().upper()
+        if code_name.startswith("DEFENDING") or code_name == "DEFENSIVE TRANSITION":
+            side = 1 - side
         lo, hi = max(0, ev["start_frame"]), min(len(codes), ev["end_frame"])
         seg = codes[lo:hi]
         gg = g[lo:hi] & (seg <= 1)
@@ -374,6 +380,20 @@ def d_overlap_section(tr: Tracking, runs, events: Optional[Sequence[dict]], code
     return "Our D vs physical cues", lines
 
 
+def feature_distribution_section(tr: Tracking, g) -> Section:
+    """Share of graded frames per symbol of the EXP-003 streams, to compare against the degraded external bench."""
+    from .model.hmm import EXTRA_NSYM, extract_extra
+    extra = extract_extra(tr, ("out", "crowd"))
+    lines = []
+    for name, sym in extra.items():
+        s = sym[g]
+        valid = s >= 0
+        shares = [float((s[valid] == k).mean()) if valid.any() else float("nan") for k in range(EXTRA_NSYM[name])]
+        lines.append("stream {}: valid share of graded frames {} | symbol shares {}".format(
+            name, _pct(valid.sum(), s.size), " ".join("{:.3f}".format(v) for v in shares)))
+    return "EXP-003 stream distributions (graded)", lines
+
+
 def submission_section(codes: np.ndarray, g) -> Section:
     """Aggregates of OUR OWN output (H=0 A=1 D=2 X=3). Counts and durations only."""
     lines = []
@@ -402,6 +422,7 @@ def build_profile(tr: Tracking, runs: Sequence[Tuple[int, int]], events: Optiona
         stillness_section(tr, runs, g),
         proximity_section(tr, g),
         d_proxy_section(tr, runs, g),
+        feature_distribution_section(tr, g),
     ]
     if events is not None:
         sections.append(tagging_section(events, tr.n_frames, g))

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .common import Tracking
+from .common import PITCH_M, Tracking
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,23 @@ class DegradeParams:
     p_switch_per_min: float = 0.5      # ASSUMPTION: same-team ID swaps per minute
     switch_radius_m: float = 5.0       # ASSUMPTION
     pos_noise_m: float = 0.3           # ASSUMPTION
+    # EXP-003 realism options. Defaults keep the original behaviour (iid noise, no glitches).
+    noise_corr: float = 0.0            # AR(1) correlation of position noise (0 = iid, as before)
+    p_ball_glitch_per_min: float = 0.0  # spurious ball jumps; estimated from profile aggregates (PROVENANCE.md)
+    glitch_max_frames: int = 3         # ASSUMPTION: a glitch lasts 1..3 frames
+    glitch_margin_m: float = 10.0      # ASSUMPTION: glitch positions fall within the pitch +- this margin
     fps: int = 25
+
+
+def calibrated_params(**overrides) -> DegradeParams:
+    """Degradation matched to the AGGREGATE profile of the competition tracking (outputs/profile.md), no labels:
+    competition ball-step p50/p90/p99 = 5.1/14.3/24.6 m/s, 0.23% of steps > 40 m/s, median-player step speed
+    p10/p50/p90 = 0.56/1.34/3.07 m/s. Clean Metrica already sits close to these; iid per-frame noise (the
+    original default) inflates them 5-10x. AR(1) noise with rho 0.999 and 0.7 glitches/min reproduce them
+    (scripts/calibrate_degrade.py). See PROVENANCE.md."""
+    base = dict(noise_corr=0.999, p_ball_glitch_per_min=0.7)
+    base.update(overrides)
+    return DegradeParams(**base)
 
 
 def _markov_mask(rng, n, p_missing, mean_gap):
@@ -45,6 +61,19 @@ def _markov_mask(rng, n, p_missing, mean_gap):
     return mask
 
 
+def _noise(rng, shape, sigma, rho):
+    """iid Gaussian noise, or AR(1) along axis 0 with stationary std `sigma` when rho > 0."""
+    if rho <= 0:
+        return rng.normal(0.0, sigma, shape)
+    eps = rng.normal(0.0, 1.0, shape)
+    out = np.empty(shape)
+    out[0] = sigma * eps[0]
+    k = sigma * np.sqrt(1.0 - rho * rho)
+    for t in range(1, shape[0]):
+        out[t] = rho * out[t - 1] + k * eps[t]
+    return out
+
+
 def degrade(clean: Tracking, seed: int, params: DegradeParams = DegradeParams()) -> Tracking:
     rng = np.random.default_rng(seed)
     n, n_slots, _ = clean.players.shape
@@ -65,8 +94,14 @@ def degrade(clean: Tracking, seed: int, params: DegradeParams = DegradeParams())
             players[t:, [i, j]] = players[t:, [j, i]]
 
     # 2. position noise, then dropouts and ball gaps.
-    players += rng.normal(0.0, params.pos_noise_m, players.shape)
-    ball += rng.normal(0.0, params.pos_noise_m, ball.shape)
+    players += _noise(rng, players.shape, params.pos_noise_m, params.noise_corr)
+    ball += _noise(rng, ball.shape, params.pos_noise_m, params.noise_corr)
+    if params.p_ball_glitch_per_min > 0:
+        length, width = PITCH_M
+        lo = np.array([-params.glitch_margin_m, -params.glitch_margin_m])
+        hi = np.array([length + params.glitch_margin_m, width + params.glitch_margin_m])
+        for t in rng.integers(0, n, size=rng.poisson(params.p_ball_glitch_per_min * minutes)):
+            ball[t:t + int(rng.integers(1, params.glitch_max_frames + 1))] = rng.uniform(lo, hi)
     for s in range(n_slots):
         players[_markov_mask(rng, n, params.drop_rate, params.mean_drop_frames), s] = np.nan
     # Ball: the input may already miss frames. Add gaps so that the TOTAL missing rate hits the
