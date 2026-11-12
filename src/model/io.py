@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .frame_clf import FEATURE_NAMES, SoftmaxModel
+from .frame_clf import FEATURE_NAMES, MlpModel, SoftmaxModel
 from .hmm import HmmParams
 
 
@@ -39,6 +39,24 @@ def load_softmax(path):
         raise ValueError("softmax params were fitted with a different feature set; refit with python -m src.fit_params")
     model = SoftmaxModel(np.array(payload["W"]), np.array(payload["mean"]), np.array(payload["std"]),
                          np.array(payload["log_prior"]))
+    return model, payload["meta"]
+
+
+def save_mlp(path, model, meta: dict) -> None:
+    """One-hidden-layer MLP emission model (EXP-013/014) as small JSON."""
+    payload = {"meta": meta, "feature_names": list(FEATURE_NAMES), "W1": model.W1.tolist(), "b1": model.b1.tolist(),
+               "W2": model.W2.tolist(), "b2": model.b2.tolist(), "mean": model.mean.tolist(), "std": model.std.tolist(),
+               "log_prior": model.log_prior.tolist()}
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+
+
+def load_mlp(path):
+    payload = json.loads(Path(path).read_text())
+    if payload["feature_names"] != list(FEATURE_NAMES):
+        raise ValueError("MLP params were fitted with a different feature set; refit with python -m src.fit_params")
+    model = MlpModel(*(np.array(payload[k]) for k in ("W1", "b1", "W2", "b2", "mean", "std", "log_prior")))
     return model, payload["meta"]
 
 

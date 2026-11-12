@@ -40,6 +40,26 @@ stats(degrade(clean, 1, calibrated_params()), "calibrated (used)")
 print("COMPETITION (profile): ball step p10/50/90/99 = 1.0/5.1/14.3/24.6  >40: 0.23%  "
       "crowd step p10/50/90/99 = 0.56/1.34/3.07/4.75")
 
+# Sweeps that justify the two remaining constants of calibrated_params() against the same AGGREGATE targets:
+#  - ball glitch rate: share of ball steps above 40 m/s (target 0.23%, competition profile; clean Metrica already has ~0.15%)
+#  - mean_gap_frames: length of ball-missing runs (targets: median 10.7 s, p90 33.8 s, competition profile)
+print("\nglitch sweep (noise_corr 0.999): share of steps > 40 m/s, target 0.23%")
+for glitch in (0.0, 0.35, 0.7, 1.4, 1.7):
+    t = degrade(clean, 1, calibrated_params(p_ball_glitch_per_min=glitch))
+    s = np.linalg.norm(np.diff(t.ball, axis=0), axis=1) * FPS
+    s = s[np.isfinite(s)]
+    print("  glitch {:.2f}/min -> {:.2f}%".format(glitch, 100 * (s > 40).mean()))
+
+print("\ngap sweep: ball-missing run length (s), targets median 10.7, p90 33.8")
+for gap in (50, 200, 400, 800):
+    t = degrade(clean, 1, calibrated_params(mean_gap_frames=float(gap)))
+    miss = ~np.isfinite(t.ball[:, 0])
+    pad = np.concatenate(([0], miss.astype(np.int8), [0]))
+    d = np.diff(pad)
+    lens = (np.flatnonzero(d == -1) - np.flatnonzero(d == 1)) / FPS
+    print("  mean_gap_frames {:4d} -> median {:.1f} s, p90 {:.1f} s, missing share {:.3f}".format(
+        gap, np.median(lens), np.quantile(lens, 0.9), miss.mean()))
+
 # Symbol shares of the EXP-003 streams on the calibrated degraded game, to compare with the
 # "EXP-003 stream distributions (graded)" section of outputs/profile.md (competition).
 tr = degrade(clean, 1, calibrated_params())

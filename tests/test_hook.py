@@ -58,6 +58,15 @@ class HookTests(unittest.TestCase):
         for name in ("frames.parquet", "BAR-ATH_tactical_atd.txt", "clip.mp4"):
             self.assertNotEqual(self._commit(name, "x").returncode, 0, name)
 
+    def test_csv_and_generated_analysis_blocked_but_organiser_baselines_pass(self):
+        for name in ("my_submission.csv", "outputs/x.csv", "profile.md", "docs/profile_match.md", "local_proposals.md"):
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            self.assertNotEqual(self._commit(name, "x").returncode, 0, name)
+            _git(self.repo, "restore", "--staged", name)
+        base = "evaluation/results/baseline_smooth50.csv"
+        (self.repo / base).parent.mkdir(parents=True, exist_ok=True)
+        self.assertEqual(self._commit(base, "frame,label\n").returncode, 0)
+
     def test_plain_source_passes(self):
         self.assertEqual(self._commit("a.py", "print(1)\n").returncode, 0)
 

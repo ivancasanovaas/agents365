@@ -88,13 +88,87 @@ def feature_matrix(df: pd.DataFrame, out_run_s: np.ndarray, swap: bool = False) 
     return X.astype(np.float32)
 
 
-def build_features(tr, runs, swap_too: bool = False):
-    """Frame table -> (X, X_swapped or None). Imported lazily to keep the module light."""
+WINDOWS_S = (2.0, 5.0)           # +- seconds for the context means (EXP-012)
+GAP_AGE_CAP = 1500               # frames (60 s): ages are capped
+_CTX_SERIES = ("dpair", "dnear5", "snear", "crowd", "dspd", "out", "vis")
+CTX_WIN_NAMES = ["{}_w{}".format(s, int(w)) for w in WINDOWS_S for s in _CTX_SERIES]
+CTX_GAP_NAMES = ["s_smooth", "gap_last_s", "gap_last_age", "gap_next_s", "gap_next_age"]
+CTX_NAMES = CTX_WIN_NAMES + CTX_GAP_NAMES
+
+
+def feature_names(context: bool = False) -> List[str]:
+    return list(FEATURE_NAMES) + (CTX_NAMES if context else [])
+
+
+def _window_mean(a: np.ndarray, valid: np.ndarray, half: int) -> np.ndarray:
+    """Mean of `a` over the +-half window using only valid entries; 0 where the window has none."""
+    n = len(a)
+    csum = np.concatenate(([0.0], np.cumsum(np.where(valid, a, 0.0))))
+    ccnt = np.concatenate(([0.0], np.cumsum(valid.astype(float))))
+    idx = np.arange(n)
+    lo, hi = np.maximum(0, idx - half), np.minimum(n, idx + half + 1)
+    cnt = ccnt[hi] - ccnt[lo]
+    out = np.zeros(n)
+    ok = cnt > 0
+    out[ok] = (csum[hi] - csum[lo])[ok] / cnt[ok]
+    return out
+
+
+def context_matrix(X: np.ndarray, fps: int = 25) -> np.ndarray:
+    """Temporal-context features computed from the base feature matrix of ONE full-length game (n, d) -> (n, 19).
+    Window means over +-2 s and +-5 s of the team/ball signals, and for ball-missing frames the smoothed 'which team is
+    nearer to the ball' evidence at the last and at the next frame with a visible ball, with its age. Non-causal on purpose
+    (offline decoding). Antisymmetric signals flip sign under the home/away swap automatically."""
+    idx = {n: i for i, n in enumerate(FEATURE_NAMES)}
+    col = lambda name: X[:, idx[name]].astype(float)  # noqa: E731
+    n = len(X)
+    vis = col("ball_vis") > 0
+    team_ok = col("team_ok") > 0
+    s_raw = np.tanh((np.expm1(col("dmin_a")) - np.expm1(col("dmin_h"))) / 5.0)       # > 0: home nearer
+    series = {"dpair": (col("dpair"), team_ok), "dnear5": (col("near5_h") - col("near5_a"), vis),
+              "snear": (s_raw, vis), "crowd": (col("crowd_log"), np.ones(n, bool)),
+              "dspd": (col("dspd"), team_ok), "out": (col("out"), np.ones(n, bool)),
+              "vis": (col("ball_vis"), np.ones(n, bool))}
+    cols = []
+    for w in WINDOWS_S:
+        half = int(round(w * fps))
+        cols += [_window_mean(series[s][0], series[s][1], half) for s in _CTX_SERIES]
+
+    half1 = fps                                                                        # +-1 s smoothing of the evidence
+    csum = np.concatenate(([0.0], np.cumsum(np.where(vis, s_raw, 0.0))))
+    ccnt = np.concatenate(([0.0], np.cumsum(vis.astype(float))))
+    ar = np.arange(n)
+    lo, hi = np.maximum(0, ar - half1), np.minimum(n, ar + half1 + 1)
+    cnt = ccnt[hi] - ccnt[lo]
+    s_sm = np.full(n, np.nan)
+    s_sm[cnt > 0] = ((csum[hi] - csum[lo])[cnt > 0]) / cnt[cnt > 0]
+    finite = np.isfinite(s_sm)
+    last = np.maximum.accumulate(np.where(finite, ar, -1))
+    nxt = np.minimum.accumulate(np.where(finite, ar, n + GAP_AGE_CAP)[::-1])[::-1]
+    gap = (~vis).astype(float)
+    have_last, have_next = last >= 0, nxt < n
+    last_s = np.where(have_last, s_sm[np.clip(last, 0, n - 1)], 0.0)
+    next_s = np.where(have_next, s_sm[np.clip(nxt, 0, n - 1)], 0.0)
+    age_last = np.where(have_last, np.minimum(ar - last, GAP_AGE_CAP), GAP_AGE_CAP)
+    age_next = np.where(have_next, np.minimum(nxt - ar, GAP_AGE_CAP), GAP_AGE_CAP)
+    cols += [np.where(finite, s_sm, 0.0), gap * last_s, gap * np.log1p(age_last / fps),
+             gap * next_s, gap * np.log1p(age_next / fps)]
+    out = np.stack(cols, axis=1).astype(np.float32)
+    assert out.shape == (n, len(CTX_NAMES))
+    return out
+
+
+def build_features(tr, runs, swap_too: bool = False, context: bool = False):
+    """Frame table -> (X, X_swapped or None). With `context`, the temporal-context columns are appended (EXP-012).
+    Imported lazily to keep the module light."""
     from .frame_features import build_frame_table
     df = build_frame_table(tr, runs)
     out_run_s = F.run_length_per_frame(F.outside_mask(tr.ball)) / 25.0
-    X = feature_matrix(df, out_run_s, swap=False)
-    return X, (feature_matrix(df, out_run_s, swap=True) if swap_too else None)
+
+    def make(swap):
+        X = feature_matrix(df, out_run_s, swap=swap)
+        return np.concatenate([X, context_matrix(X)], axis=1) if context else X
+    return make(False), (make(True) if swap_too else None)
 
 
 @dataclass
@@ -132,7 +206,62 @@ def fit_softmax(X: np.ndarray, y: np.ndarray, l2: float = L2, iters: int = ITERS
     return SoftmaxModel(W, mean, std, np.log(prior / prior.sum()))
 
 
-def predict_log_proba(model: SoftmaxModel, X: np.ndarray) -> np.ndarray:
+@dataclass
+class MlpModel:
+    """One hidden layer (ReLU) + softmax output, numpy only (EXP-013). Same interface as SoftmaxModel for decoding."""
+    W1: np.ndarray         # (d, h)
+    b1: np.ndarray         # (h,)
+    W2: np.ndarray         # (h, 3)
+    b2: np.ndarray         # (3,)
+    mean: np.ndarray
+    std: np.ndarray
+    log_prior: np.ndarray
+
+    def log_proba(self, X: np.ndarray) -> np.ndarray:
+        Z = (X.astype(np.float64) - self.mean) / self.std
+        logits = np.maximum(Z @ self.W1 + self.b1, 0.0) @ self.W2 + self.b2
+        logits -= logits.max(axis=1, keepdims=True)
+        return logits - np.log(np.exp(logits).sum(axis=1, keepdims=True))
+
+
+MLP_HIDDEN, MLP_L2, MLP_LR, MLP_ITERS = 32, 1e-3, 0.02, 300
+
+
+def fit_mlp(X: np.ndarray, y: np.ndarray, hidden: int = MLP_HIDDEN, l2: float = MLP_L2, lr: float = MLP_LR,
+            iters: int = MLP_ITERS, seed: int = 0) -> MlpModel:
+    """Fixed-hyperparameter MLP trained with Adam, full batch, deterministic for a seed."""
+    X = X.astype(np.float64)
+    mean, std = X.mean(axis=0), X.std(axis=0)
+    std[std < 1e-8] = 1.0
+    Z = (X - mean) / std
+    Y = np.eye(N_STATES)[y]
+    rng = np.random.default_rng(seed)
+    d = Z.shape[1]
+    params = [rng.normal(0, np.sqrt(2.0 / d), (d, hidden)), np.zeros(hidden),
+              rng.normal(0, np.sqrt(2.0 / hidden), (hidden, N_STATES)), np.zeros(N_STATES)]
+    m = [np.zeros_like(p) for p in params]
+    v = [np.zeros_like(p) for p in params]
+    b1, b2, eps = 0.9, 0.999, 1e-8
+    n = len(Z)
+    for t in range(1, iters + 1):
+        W1, bb1, W2, bb2 = params
+        A = np.maximum(Z @ W1 + bb1, 0.0)
+        P = _softmax(A @ W2 + bb2)
+        dL = (P - Y) / n
+        gW2, gb2 = A.T @ dL + l2 * W2, dL.sum(axis=0)
+        dA = (dL @ W2.T) * (A > 0)
+        gW1, gb1 = Z.T @ dA + l2 * W1, dA.sum(axis=0)
+        for k, g in enumerate((gW1, gb1, gW2, gb2)):
+            m[k] = b1 * m[k] + (1 - b1) * g
+            v[k] = b2 * v[k] + (1 - b2) * g * g
+            params[k] = params[k] - lr * (m[k] / (1 - b1 ** t)) / (np.sqrt(v[k] / (1 - b2 ** t)) + eps)
+    prior = np.bincount(y, minlength=N_STATES).astype(float)
+    return MlpModel(params[0], params[1], params[2], params[3], mean, std, np.log(prior / prior.sum()))
+
+
+def predict_log_proba(model, X: np.ndarray) -> np.ndarray:
+    if hasattr(model, "log_proba"):
+        return model.log_proba(X)
     Z = np.concatenate([(X.astype(np.float64) - model.mean) / model.std, np.ones((len(X), 1))], axis=1)
     logits = Z @ model.W
     logits -= logits.max(axis=1, keepdims=True)

@@ -14,6 +14,9 @@ from .common import REPO_ROOT
 
 SKILLCORNER_IDS = ("1874553", "1886347", "1899585", "1925299")
 METRICA_CSV_GAMES = (1, 2)
+# UNTOUCHED HOLD-OUT (EXP-014): never listed by `available()`, never used for training, tuning or selection. Only
+# `load_holdout` can read them and only src/external/run_exp014.py calls it.
+HOLDOUT_IDS = ("1927964", "1953632", "1959846", "1986691")
 
 
 def _loaders() -> Dict[str, Callable]:
@@ -45,6 +48,23 @@ def available() -> List[str]:
         if path.exists() and path.stat().st_size > 1_000_000:
             names.append(name)
     return names
+
+
+def holdout_available() -> List[str]:
+    """Hold-out matches present on disk. Used ONLY by EXP-014."""
+    out = []
+    for m in HOLDOUT_IDS:
+        path = REPO_ROOT / "ext_open" / "skillcorner_{}".format(m) / "{}_tracking_extrapolated.jsonl".format(m)
+        if path.exists() and path.stat().st_size > 1_000_000:
+            out.append("skillcorner_{}".format(m))
+    return out
+
+
+def load_holdout(name: str):
+    if not name.startswith("skillcorner_") or name[len("skillcorner_"):] not in HOLDOUT_IDS:
+        raise KeyError("{!r} is not a hold-out match".format(name))
+    from . import skillcorner
+    return skillcorner.load_match(name[len("skillcorner_"):])
 
 
 def load(name: str):

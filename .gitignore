@@ -74,3 +74,16 @@ runs/
 *.pkl
 
 ext_open/
+
+# -- extra safety nets (pre-delivery audit) ------------------------------------------------------
+# Derived frame-level exports, match aggregates and anything shaped like a competition asset or a submission.
+derived/
+*.feather
+profile*.md
+local_proposals.md
+dgx_inventory.txt
+submission*.csv
+*_atd.txt
+*_atd.xml
+*_homography.csv
+*_smart_tagging.xml

@@ -1,113 +1,161 @@
-# Technical report: possession labelling with an HMM over noisy tracking
+# Technical report: possession labelling with a hidden Markov model and discriminative emissions
 
-Team: `<TEAM_NAME>` (members: `<NAMES>`). Repository: `<PUBLIC_REPO_URL>`. Draft status: the pipeline
-has been validated on external games only; sections marked TODO must be completed after the first
-run on the competition data.
+Team: `<TEAM_NAME>` (members: `<NAMES>`). Repository: `<PUBLIC_REPO_URL>`. Match: BAR-ATH, tactical timeline (199,319 frames).
+Status: the model is selected and validated on **external games only**; no label of the provided match was used for training,
+selection or tuning (section 6).
 
 ## 1. Approach and why
 
-The task is sequence labelling scored by possession spells (spellF1), so the unit that matters is the
-possession interval, not the frame. The organiser baseline (nearest tracked player to the ball + majority
-vote) is built from per-frame decisions and over-fragments: on the public five minutes its raw variant
-reports 131 possessions against 17 real ones.
+spellF1 scores possessions, not frames, so the unit that matters is the possession interval. The organiser baseline (nearest
+player to the ball, majority vote) decides frame by frame and fragments possessions. We label the match with a **three-state
+hidden Markov model** (H, A, D) decoded offline with **Viterbi** inside each graded half. A possession is therefore a run of a
+sticky state, and gaps in the tracking are bridged by the state, not by guessing.
 
-We model the match as a **three-state hidden Markov model** (H = home possession, A = away possession,
-D = dead ball) decoded offline with **Viterbi** inside each graded half. Offline decoding uses both past
-and future frames. States are sticky, so isolated flicker is absorbed and possessions come out as
-intervals.
-
-Per-frame evidence (naive Bayes, tempered by a factor `temp = 0.3` because consecutive frames are strongly
-correlated):
-
-- team of the nearest tracked player to the ball, bucketed by distance (< 1, 1-2, 2-4, 4-8, > 8 m);
-- when the ball is not visible (41% of graded frames) the frame adds **no** evidence; the transition prior
-  carries the previous possession across the gap. We never turn a missing ball into `D`.
-
-Ball speed was implemented as a second evidence stream but is **disabled**: it helped within one game and
-did not help when transferring to another (section 3).
-
-Frames before the second-half kickoff (graded, all `D` per FAQ.md) are forced to `D` using the published
-kickoff frame; everything outside the graded halves is `X`.
+**Emissions.** For every frame a **small neural network (one hidden layer of 32 ReLU units, softmax output, numpy only)** gives
+P(state | x) from 32 collective features computed from the tracking only. A linear softmax with the same features is the
+reference model. The HMM uses the scaled likelihood P(state | x) / P(state) with a temperature of 0.3 (consecutive frames
+are strongly correlated, so the evidence is down-weighted). The transition matrix and the initial prior come from counting on the
+same training games. Features (all orientation-free, none depends on the anonymous track-slot identities):
+- ball visibility and, per team, the distance from the ball to the nearest player, to the 3 nearest, to the team centroid, and the
+  number of players within 5 m and 10 m of the ball (the ball is missing on 41% of graded frames, so these carry a validity flag);
+- ball speed over a 1 s window (12 frames each side), ball-outside-the-pitch flag with the length bucket of the outside run
+  (FIFA Law 9);
+- collective stillness: median player speed over the same 1 s window, in coarse buckets (a dead ball shows up as players that stop);
+- team shape: compactness (mean pairwise distance) and spread of each team, their differences, and team speeds. The team that has
+  the ball is the more spread one and the defender compacts; this signal is strongly informative but only useful when modelled
+  jointly with the others (a plain product of per-signal likelihoods made it harmful, section 4).
+Home/away symmetry is enforced by also training on the team-swapped copy of every frame. The 2,934 graded frames before the
+second-half kickoff are forced to `D` (published rule in FAQ.md); everything outside the graded halves is `X`.
 
 ## 2. Assets used and dropped
 
-Used: the tactical ATD tracking (`*_atd.txt`) and its metadata (team of each track slot), via the organiser's
-`games.py` and `starter/baseline.py` helpers.
-
-Not used: Smart Tagging, homography, both videos, the broadcast ATD. Tried and dropped: ball-speed evidence;
-labelling ball-less windows `X` instead of `D` in the baseline (EXP-001, no spellF1 gain, large macroF1 loss).
+Used: the tactical ATD tracking and its metadata (team of each slot), through the organiser's `games.py` / `starter/baseline.py`
+helpers. **Smart Tagging is not used by the model**: we only use it afterwards as an independent consistency check (our labels
+agree with its `Team` tag 78% of the time on frames where we say H or A, up from 64% with the previous model; note that the
+`Team` of the `DEFENDING...` codes is the defending side). Homography, both videos and the broadcast tracking are not used.
 No private or in-house model is used.
+
+Tried and dropped (each one pre-registered with a fixed decision rule, see `experiments/`): ball-speed stream in the naive-Bayes
+model; ball-outside + stillness streams combined with a gap-edge stream (EXP-003); per-game quantile bucketing of stillness
+(EXP-004); three ways of adding team shape as a naive-Bayes stream (EXP-005/006/007); duration handling by H<->A damping and a
+minimum-duration filter (EXP-009); softmax temperatures 0.1 (EXP-010) and 0.5/0.7/1.0 (EXP-011); 19 temporal-context features
+(EXP-012). The one-hidden-layer MLP (EXP-013: +0.027 spellF1 over the linear softmax, positive in 7 of 7 development games, below
+the pre-registered 0.04 margin) was **adopted only after** a pre-registered confirmation on four untouched games (EXP-014).
 
 ## 3. Training and validation data (other games only)
 
-No label from the provided match is used anywhere: no hand labels, no public-GT training or tuning.
+| Dataset | Source | Labeller | Use |
+|---|---|---|---|
+| Metrica Sample Games 1, 2, 3 (145,006 / 141,156 / 143,761 frames at 25 fps) | github.com/metrica-sports/sample-data (no formal licence; responsible use and credit requested) | the provider (Metrica) produced the tracking and the human-annotated events; **we label nothing**: `src/external/metrica.py`, `metrica_csv.py` and `labels.py` convert the events to H/A/D by a fixed algorithm | training and validation |
+| SkillCorner open data, 4 A-League matches: 1874553, 1886347, 1899585, 1925299 (150,752 / 147,652 / 151,325 / 153,252 frames after resampling from 10 to 25 fps) | github.com/SkillCorner/opendata (MIT) | the provider (SkillCorner) produced the tracking and the phases of play; we convert the phases to H/A/D with `src/external/skillcorner.py` | training and validation |
 
-| Dataset | Source | Size | Labeller | Use |
-|---|---|---|---|---|
-| Metrica Sports Sample Game 3 | github.com/metrica-sports/sample-data (no formal licence; asks for responsible use and credit) | 143,761 frames at 25 fps, 3,620 events | none by us: labels derived **algorithmically** from the provider's event data (human-produced by the provider) | HMM parameter estimation; development benchmark |
-| SkillCorner open data, match 1874553 (A-League 2024/25) | github.com/SkillCorner/opendata (MIT, credit SkillCorner) | 60,301 frames at 10 fps, resampled to 25 fps | none by us: labels derived algorithmically from the provider's phases of play | out-of-game transfer test |
+All files are pinned to a source commit and verified by sha256 (`scripts/fetch_external.py`). Total 1,032,904 frames.
+In addition, **four further SkillCorner matches (1927964, 1953632, 1959846, 1986691) are an untouched hold-out set**: they are
+excluded from `registry.available()`, never used for training, tuning or selection (a test checks that no model file mentions
+them) and were scored once, in EXP-014. Labels follow the competition definition: control events (pass, carry,
+shot, recovery, set piece) set the team; challenges and lost balls do not change it ("control, not touch"); dead ball runs from a
+ball-out, foul or goal to the next restart. The external D comes from events/phases while the competition's comes from corrected
+tracking, so absolute numbers differ; the mechanism is what transfers.
 
-The HMM parameters (transition matrix, emission tables) are **estimated by counting** on Metrica labels and
-stored in `models/hmm_params.json`; `python -m src.fit_params` regenerates them. Constants and their
-origins are listed in `PROVENANCE.md`.
+**Degrader.** External tracking is cleaner than the competition's, so it is corrupted by a seeded degrader (ball missing 41%,
+~20.5 players present, same-team identity swaps, slot anonymisation, correlated position noise, spurious ball jumps, long ball
+gaps). Its noise, glitch rate and gap length are **calibrated against aggregate statistics of the competition tracking** (ball-step
+speed quantiles, share of steps above 40 m/s, median-player speed, length of ball-missing runs), with no labels; the recipe is
+`scripts/calibrate_degrade.py` and `PROVENANCE.md`. The first version of the bench was far too noisy and had ball gaps of ~2 s;
+after calibration the realised gaps have a median of ~7 s and a p90 of ~37 s (the competition's are 10.7 s and 34 s), so the bench
+is still somewhat milder than the real tracking in the median. Both corrections were made after the first experiments;
+EXP-003/004 and the team-shape experiments were re-run on the corrected bench (EXP-008) and kept their decisions (apart from the
+disclosed judgement call below); EXP-009 to EXP-013 were run on it. The very early comparison of EXP-002 (ball-speed stream,
+temperature) was not re-run, but the temperature was re-checked in EXP-010/011.
 
-**Degrader.** Because the external tracking is cleaner than the competition's, we corrupt it with a seeded,
-parametrised degrader (`src/external/degrade.py`): total ball-missing rate raised to the published 41%,
-players dropping out (~20.5 of 22 present on average, published), same-team identity swaps, position noise
-and anonymised slots. Gap length, swap rate and noise are **assumptions** (not published) and are recorded as such.
+## 4. Validation protocol and results
 
-**Results (external games, spellF1 / macroF1, 3 seeds, no competition data):**
+Every decision from EXP-003 on was taken on external games with a decision rule written in `experiments/EXP-0xx.md` **before**
+running. EXP-003 to EXP-009 used 2-game settings (Metrica cross-fitted by half; Metrica -> SkillCorner; from EXP-004 also
+SkillCorner -> Metrica), requiring a spellF1 gain above 0.04 (the scorer's noise band) in every setting. From EXP-010 on, with
+seven games, the protocol is **leave-one-game-out** (train on six, test on the seventh, three degradation seeds): a variant is
+adopted only if the mean spellF1 gain exceeds 0.04, is positive in at least 5 of the 7 games, and loses no more than 0.02 of
+D-F1 or macroF1. All seven development games were used repeatedly in these decisions, so those numbers are optimistic; the
+four hold-out games (EXP-014) give an estimate unaffected by model selection, except for one decision (MLP versus softmax).
 
-| Setting | smooth50 baseline | HMM (team evidence, temp 0.3) |
+| Mean spellF1 / macroF1 / D-F1 | 7 development games, leave-one-game-out | **4 untouched hold-out games** |
 |---|---|---|
-| Metrica, 2-fold cross-fit by half | 0.263 / 0.700 | 0.407 / 0.589 |
-| Metrica -> SkillCorner (transfer, SkillCorner never used to fit) | 0.306 / 0.726 | 0.399 / 0.536 |
+| team-only naive Bayes (A) | 0.379 / 0.576 / 0.436 | 0.385 / 0.554 / 0.363 |
+| + ball-outside and stillness streams (C) | 0.434 / 0.746 / 0.782 | 0.429 / 0.783 / 0.830 |
+| linear softmax emissions | 0.516 / 0.810 / 0.834 | 0.541 / 0.856 / 0.899 |
+| **MLP emissions (production)** | 0.543 / 0.822 / 0.844 | **0.564 / 0.870 / 0.910** |
 
-`temp` was selected on a sweep over these two games, so these numbers are optimistic. The gain is roughly
-halved when transferring, and macroF1 drops.
+The softmax beats C in 7 of 7 development games (+0.082 spellF1) and by +0.112 on the hold-out. The MLP beats the softmax in 7 of 7
+development games (+0.027) and in 3 of 4 hold-out games (+0.023); all hold-out games are SkillCorner A-League matches. The organiser baseline (smooth50) scores 0.243 on the full match. On the
+provided match we only inspect **aggregates of our own output** (no score is available to us): dead-ball share 42% (the external
+games range from 30% to 51%), ball-outside frames labelled `D` 90%, ~230 possessions with a median of 7-12 s, and the 78%
+agreement with the Smart Tagging described above.
 
-TODO: result on the public five-minute window, reported only as a pipeline-correctness check and never used
-to choose among variants.
+**Deviations from the pre-registered rules, disclosed.** (a) EXP-003: the definition of variant C was amended before any result was
+seen (crowd stillness instead of ball stationary, because the aggregate profile showed the latter is rare; assumed bucket edges
+instead of edges estimated on external games). (b) EXP-003 on the corrected bench: the literal outcome of the rule was variant D
+(gap-edge stream) because each variant was compared with the last kept one, never with C; compared directly D is no better than C
+and clearly worse in the transfer (D-F1 -0.20), so **C was kept as a judgement call, not as the rule's output**. In the first run C
+was also kept with a minimum per-seed gain of +0.031 under a rule that asked for gains "consistent across seeds". (c) EXP-013
+rejected the MLP by the 0.04 margin although it was better in 7 of 7 games; it was then adopted through a separate pre-registered
+confirmation on untouched games (EXP-014) whose margin (+0.02, 3 of 4 games) is lower than the general one; the MLP passed with
++0.023 and 3 of 4. The later experiments compare each candidate with the production variant.
 
-## 4. Possession rules
+## 5. Possession rules we implemented
 
-- A possession is a maximal run of H or A; dead-ball stretches split possessions.
-- External labels follow the competition definition: control events (pass, carry, shot, recovery, set piece) set
-  the team; challenges and lost balls do not change it by themselves ("control, not touch"). Dead ball runs from
-  a ball-out, foul or goal to the next restart. SkillCorner labels take the team of the covering phase of play
-  and `D` where no phase exists.
-- On the competition match the model has no rule for loose balls, challenges or restarts: they are handled only
-  by the learned stickiness, which smooths them out. Dead-ball detection is limited to the pre-kickoff block.
-
-## 5. Limitations and planned improvements
-
-- **Not yet run on the competition data** (TODO: add final possession counts and any parser fixes).
-- Event- and phase-derived external labels do not match the competition's tracking-based dead-ball definition.
-- Only two external games; `temp` and the distance buckets are provisional.
-- Weak dead-ball model; no set-piece or restart detection; Smart Tagging unused.
-- Planned: dead-ball features (ball speed with a transferable calibration, proximity to lines, set-piece tags),
-  more external games, joint fitting across games.
+A possession is a maximal run of H or A with the ball alive; D splits possessions. There are no hand-written rules for loose
+balls, challenges, aerial duels or clearances: possession stays with the last team until the evidence for the other team is
+sustained (the stickiness of the HMM and the temporal averaging of the features), which follows the "control, not touch"
+definition. Restarts are not modelled explicitly beyond the dead-ball cues (ball outside the pitch, collective stillness).
 
 ## 6. Compliance statement
 
-- No hand annotation or hand correction of the provided match; no human labels about it.
-- The private ground truth was never available to us. The public five-minute ground truth is used only to check
-  that the scorer and pipeline run, not for training or tuning.
-- Development used an AI coding assistant (Claude Code). It was configured to deny reads of the data folder and
-  a hook blocks shell commands touching it; the match data was not given to it. It read the organiser's public
-  code and documentation, our external datasets, and aggregate scoreboard values of the four published baselines.
-- Match data is not committed or redistributed; `data/` is git-ignored.
+- No hand annotation or hand correction of the provided match. No human label about it was used, in any amount.
+- The private ground truth was never available to us. The public five-minute ground truth was used only to check that the scorer
+  and pipeline run (early baseline sanity check); it was never used to train, tune or choose among variants.
+- Every threshold and constant has an origin in `PROVENANCE.md` (FIFA Laws, physics, external open data, aggregate statistics of
+  the tracking without labels, or a coarse assumption stated as such). Experiments, including the negative ones, are in
+  `experiments/`.
+- AI assistants: development was done with **Claude Code, a cloud service (Anthropic)**. It was configured to deny reads of the
+  data folder (a hook blocks shell commands that touch it), so no row, position or label of the match was given to it. What the
+  team did paste into the conversation, from `src/profile_datasets.py` (the exact generator of those numbers), were **aggregate
+  statistics, never per-frame values**: counts and shares of the tracking (ball visibility, number of objects), quantiles of ball
+  speed, of ball-missing run lengths and of player speed, ball-outside-the-pitch shares, Smart Tagging counts and durations per
+  code, alignment offsets between set-piece tags and physical cues, and aggregates of **our own output** (label shares, run
+  durations, H<->A switches, agreement with the tagged `Team`). They were used to calibrate the degrader and to motivate
+  hypotheses; **none was used to choose among model variants** (that was done only on external games), and our own output and the
+  Smart Tagging were never used for training or selection. Some of these aggregates are also written in `PROVENANCE.md`,
+  `scripts/calibrate_degrade.py` and `experiments/`, so they are public in the repository. The terms forbid giving "extracts" of
+  the data to a cloud LLM; we consider aggregate statistics not to be extracts, report it here in full, and will follow the
+  organisers' ruling. A local open model (Ollama, `qwen3.8:27b`) was installed on the DGX for analysis, but no
+  result in this report depends on it.
+- The match data is not committed or redistributed; `data/` and `ext_open/` are git-ignored.
 
-## 7. Reproduction
+## 7. Limitations and what we would do with more time
+
+- External labels come from events/phases, the competition's from corrected tracking: the dead-ball definition and the exact
+  moments of the changes of possession differ, so the bench gains are evidence for the mechanism, not a guarantee on the match.
+- Seven external games, from two providers; the entry cost of a new game is one adapter. More leagues would reduce the risk of a
+  shift in team shapes.
+- The temperature (0.3), the MLP size and the feature scaling are not tuned beyond the pre-registered comparisons. Longer temporal
+  context (EXP-012) and duration handling (EXP-009) gave little; a larger network, an ensemble and a proper explicit-duration
+  (semi-Markov) model are untested (see `experiments/`).
+- All four hold-out games and most development games are from one provider (SkillCorner, A-League), so a shift to LaLiga team
+  shapes is only partly covered by the Metrica games.
+- The model has no notion of who restarts a dead ball and no explicit clearance/duel logic.
+
+## 8. Reproduction
 
 ```
-pip install -r requirements.txt
-python -m src.fit_params                      # optional: needs ext_open/metrica_game3 (public source above)
-python -m src.run --data-dir /path/to/data    # writes outputs/submission.csv and validates it
+pip install -r requirements.lock.txt
+git config core.hooksPath scripts/hooks       # opt-in guard: blocks data, CSVs and notebooks with outputs at commit time
+# optional: the committed models/ already hold the fitted parameters; to refit them from the open external games:
+python scripts/fetch_external.py               # pinned download of the 7 external games into ext_open/, verified by sha256
+python -m src.fit_params                       # refits models/hmm_params.json, softmax_params.json and mlp_params.json
+python -m src.run --data-dir /path/to/data     # writes outputs/submission.csv and validates it
 python evaluation/validate_submission.py outputs/submission.csv
-python -m unittest discover -s tests          # tests use synthetic data only
+python -m unittest discover -s tests           # synthetic data only
 ```
 
-Python 3.9+ (unit tests run on 3.13), numpy and pandas only. The pipeline has no randomness, so it is expected
-to regenerate the same CSV from the repository and the provided data. TODO: confirm by comparing SHA-256 of two
-runs on the competition machine.
+Python 3.12, numpy and pandas (pinned in `requirements.lock.txt`); the pipeline has no randomness and writes the same file on
+every run (verify with `sha256sum` on two runs).

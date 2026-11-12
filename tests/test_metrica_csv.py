@@ -62,6 +62,14 @@ class MetricaCsvTests(unittest.TestCase):
         self.assertEqual(int(gt[18]), 0)                              # throw-in by home: home possession
         self.assertTrue(set(np.unique(gt)) <= {0, 1, 2, 3})
 
+    def test_holdout_is_never_available_for_development(self):
+        from src.external.registry import HOLDOUT_IDS, available, load
+        names = available()
+        for m in HOLDOUT_IDS:
+            self.assertNotIn("skillcorner_{}".format(m), names)
+            with self.assertRaises(KeyError):
+                load("skillcorner_{}".format(m))
+
     def test_registry_only_lists_present_files(self):
         names = available()
         self.assertIsInstance(names, list)

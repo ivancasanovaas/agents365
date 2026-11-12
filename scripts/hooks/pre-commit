@@ -20,6 +20,10 @@ while IFS= read -r f; do
     *.parquet|*.feather|*.mp4|*.avi|*.mkv|*.npy|*.npz|*.pkl|*.pl3container|*.gzip) bad="$bad\n  $f  (data/derived format)" ;;
     *_atd.txt|*_atd.xml|*_homography.csv|*_smart_tagging.xml) bad="$bad\n  $f  (competition asset)" ;;
     *_possession_gt.csv|*_possession_gt_meta.json|*_possession_gt_reference.csv) bad="$bad\n  $f  (private ground truth)" ;;
+    evaluation/results/baseline_*.csv|evaluation/gt/*) continue ;;   # tracked on purpose by the organisers
+    *.csv) bad="$bad\n  $f  (a CSV: submissions and exports stay out of git; only the organisers' baselines are tracked)" ;;
+    profile*.md|*/profile*.md|local_proposals.md|*/local_proposals.md|dgx_inventory.txt|*/dgx_inventory.txt)
+      bad="$bad\n  $f  (match aggregates / generated analysis stay out of the public repo)" ;;
     outputs/*|runs/*) bad="$bad\n  $f  (generated output)" ;;
     evaluation/reports/*|evaluation/scoreboard.csv) bad="$bad\n  $f  (our predictions' reports)" ;;
   esac

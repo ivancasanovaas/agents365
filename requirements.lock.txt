@@ -1,0 +1,6 @@
+# Pinned runtime for the pipeline (Python 3.12, see .python-version). Exactly what was resolved on the DGX Spark.
+# Notebook 04 additionally needs pyarrow, jupyterlab and ipykernel (not needed by `python -m src.run`).
+numpy==2.5.4
+pandas==3.1.1
+python-dateutil==4.0.0
+tzdata==2026.6

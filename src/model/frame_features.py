@@ -23,7 +23,7 @@ from .features import CROWD_LAG, mean_pairwise as _mean_pairwise, outside_mask
 
 TEAMS = (("h", 0, "home (Barcelona)"), ("a", 1, "away (Athletic Club)"))
 MIN_PLAYERS = 3                  # a team statistic needs at least this many visible slots (assumption: bare minimum)
-NEAR_RADII_M = (5.0, 10.0)       # reporting radii for "players close to the ball" (descriptive, not thresholds)
+NEAR_RADII_M = (5.0, 10.0)       # radii for "players close to the ball" (model FEATURES, not rules; see PROVENANCE.md)
 
 _TEAM_DOC = {
     "n": "Visible track slots of the team in this frame (count; slots can be duplicated/missing, ~11 expected).",

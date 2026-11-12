@@ -9,15 +9,16 @@ score is the mean over those seeds. Aggregates only; no competition data.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import time
 from typing import Dict, List
 
 import numpy as np
 
-from ..model.frame_clf import TRAIN_STRIDE, build_features, decode_softmax, fit_softmax
-from ..model.hmm import concat_evidence, decode, extract_evidence, fit
-from .common import load_possession_metrics
+from ..model.frame_clf import TRAIN_STRIDE, build_features, decode_softmax, feature_names, fit_softmax
+from ..model.hmm import Evidence, concat_evidence, decode, extract_evidence, fit
+from .common import REPO_ROOT, load_possession_metrics
 from .degrade import calibrated_params, degrade
 from .registry import available, load
 from .run_exp003 import TEMP, _score
@@ -34,12 +35,50 @@ def log(msg):
     sys.stdout.flush()
 
 
-def prepare(name, params, n_seeds):
+CACHE_DIR = REPO_ROOT / "ext_open" / "cache"      # inside the gitignored ext_open/
+
+
+def _cache_path(name, params, n_seeds, feature_names):
+    key = hashlib.sha1(repr((sorted(params.__dict__.items()), n_seeds, list(feature_names), TRAIN_STRIDE,
+                             NB_STREAMS, "v1")).encode()).hexdigest()[:12]
+    return CACHE_DIR / "{}_{}.npz".format(name, key)
+
+
+def _save_game(game, path):
+    arrays = {"gt": game["gt"], "runs": np.array(game["runs"]), "X_sub": game["X_sub"], "Xs_sub": game["Xs_sub"],
+              "y_sub": game["y_sub"], "n_tests": np.array(len(game["tests"]))}
+    ev = game["train_ev"]
+    arrays.update({"tr_team": ev.team_sym, "tr_speed": ev.speed_sym})
+    arrays.update({"tr_x_" + k: v for k, v in ev.extra.items()})
+    for i, (X, e) in enumerate(game["tests"]):
+        arrays["t{}_X".format(i)], arrays["t{}_team".format(i)], arrays["t{}_speed".format(i)] = X, e.team_sym, e.speed_sym
+        arrays.update({"t{}_x_{}".format(i, k): v for k, v in e.extra.items()})
+    np.savez_compressed(path, **arrays)
+
+
+def _load_game(name, path):
+    z = np.load(path)
+    def ev(prefix):
+        return Evidence(z[prefix + "team"], z[prefix + "speed"],
+                        {k: z[prefix + "x_" + k] for k in NB_STREAMS})
+    return {"name": name, "gt": z["gt"], "runs": [tuple(int(v) for v in r) for r in z["runs"]],
+            "train_ev": ev("tr_"), "X_sub": z["X_sub"], "Xs_sub": z["Xs_sub"], "y_sub": z["y_sub"],
+            "tests": [(z["t{}_X".format(i)], ev("t{}_".format(i))) for i in range(int(z["n_tests"]))]}
+
+
+def prepare(name, params, n_seeds, context=False):
+    """Features and evidence of one external game (training copy + test copies). Cached on disk under ext_open/cache.
+    `context=True` appends the EXP-012 temporal-context columns (cached under a different key)."""
     t0 = time.time()
+    path = _cache_path(name, params, n_seeds, feature_names(context))
+    if path.exists():
+        game = _load_game(name, path)
+        log("loaded from cache {:22s} [{:.0f}s]".format(name, time.time() - t0))
+        return game
     clean, gt, info = load(name)
     runs = info["halves"]
     tr = degrade(clean, seed=999, params=params)
-    X, Xs = build_features(tr, runs, swap_too=True)
+    X, Xs = build_features(tr, runs, swap_too=True, context=context)
     idx = np.flatnonzero(gt < 3)[::TRAIN_STRIDE]
     game = {"name": name, "gt": gt, "runs": runs,
             "train_ev": extract_evidence(tr, streams=NB_STREAMS),
@@ -47,8 +86,10 @@ def prepare(name, params, n_seeds):
     del X, Xs
     for s in range(n_seeds):
         trs = degrade(clean, seed=3000 + s, params=params)
-        Xt, _ = build_features(trs, runs, swap_too=False)
+        Xt, _ = build_features(trs, runs, swap_too=False, context=context)
         game["tests"].append((Xt, extract_evidence(trs, streams=NB_STREAMS)))
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _save_game(game, path)
     log("prepared {:22s} frames {:>7d} [{:.0f}s]".format(name, len(gt), time.time() - t0))
     return game
 
