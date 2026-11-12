@@ -1,6 +1,7 @@
 # Technical report: possession labelling with a hidden Markov model and discriminative emissions
 
-Team: `<TEAM_NAME>` (members: `<NAMES>`). Repository: `<PUBLIC_REPO_URL>`. Match: BAR-ATH, tactical timeline (199,319 frames).
+Team: **agents365** (members: Pau Marfil, Ivan Casanovas, Xavi Hernández, Martín). Repository:
+https://github.com/ivancasanovaas/agents365. Match: BAR-ATH, tactical timeline (199,319 frames).
 Status: the model is selected and validated on **external games only**; no label of the provided match was used for training,
 selection or tuning (section 6).
 
