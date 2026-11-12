@@ -88,9 +88,22 @@ four hold-out games (EXP-014) give an estimate unaffected by model selection, ex
 
 The softmax beats C in 7 of 7 development games (+0.082 spellF1) and by +0.112 on the hold-out. The MLP beats the softmax in 7 of 7
 development games (+0.027) and in 3 of 4 hold-out games (+0.023); all hold-out games are SkillCorner A-League matches. The organiser baseline (smooth50) scores 0.243 on the full match. On the
-provided match we only inspect **aggregates of our own output** (no score is available to us): dead-ball share 42% (the external
-games range from 30% to 51%), ball-outside frames labelled `D` 90%, ~230 possessions with a median of 7-12 s, and the 78%
-agreement with the Smart Tagging described above.
+provided match we only inspect **aggregates of our own output** (no score is available to us): dead-ball share 44.5% of graded
+frames (the external games range from 30% to 51%), 117 home and 114 away possessions with 103 direct H<->A switches, and 77%
+agreement with the tagged `Team` in the Smart Tagging (a consistency check, never a selection criterion; the softmax gave 78%, so
+this check does not by itself confirm the external gain). The output is bit-for-bit deterministic (same sha256 on repeated runs).
+
+**Fresh cross-provider test (EXP-016) and a negative result (EXP-017).** After the decisions above we downloaded seven Bundesliga
+matches from the Sportec Open DFL Dataset (CC BY 4.0), whose tracking comes with native per-frame ball status and owning team, the
+same definition as the competition's ground truth (dead ball, otherwise the team the tracking names as owning it). Scoring the
+production models (trained on none of them) gave the same ranking A < C < softmax < MLP: MLP D-F1 0.855, alive/dead F1 0.873,
+team accuracy 0.708, spellF1 0.359. spellF1 is not comparable with the other tables because DFL labels flip possession about twice
+as often (median spell 3 s) as the competition's public example. The models over-predict dead ball by 3-9 points there. EXP-017
+asked whether adding these native-label games to the emission training is worth it: on the DFL folds D-F1 rose to 0.935 and team
+accuracy to 0.792, but on the original development folds spellF1 fell from 0.543 to 0.531 (more than the 0.01 no-harm tolerance
+fixed beforehand), so the pre-registered rule says **keep production as is**. We report it as is: native-label training clearly
+helps dead-ball and team accuracy, at some cost in possession granularity, and we did not adopt it. A 4-state HMM whose dead-ball
+state remembers which team had the ball (EXP-015, an idea from the PathCRF paper) gave identical results and was rejected.
 
 **Deviations from the pre-registered rules, disclosed.** (a) EXP-003: the definition of variant C was amended before any result was
 seen (crowd stillness instead of ball stationary, because the aggregate profile showed the latter is rare; assumed bucket edges
@@ -136,7 +149,7 @@ definition. Restarts are not modelled explicitly beyond the dead-ball cues (ball
 
 - External labels come from events/phases, the competition's from corrected tracking: the dead-ball definition and the exact
   moments of the changes of possession differ, so the bench gains are evidence for the mechanism, not a guarantee on the match.
-- Seven external games, from two providers; the entry cost of a new game is one adapter. More leagues would reduce the risk of a
+- Seven development games from two providers (plus 4 SkillCorner hold-out and 7 DFL evaluation games, not used for training); the entry cost of a new game is one adapter. More leagues would reduce the risk of a
   shift in team shapes.
 - The temperature (0.3), the MLP size and the feature scaling are not tuned beyond the pre-registered comparisons. Longer temporal
   context (EXP-012) and duration handling (EXP-009) gave little; a larger network, an ensemble and a proper explicit-duration
