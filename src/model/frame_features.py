@@ -19,12 +19,11 @@ import numpy as np
 import pandas as pd
 
 from ..external.common import FPS, PITCH_M, Tracking
-from .features import CROWD_LAG, outside_mask
+from .features import CROWD_LAG, mean_pairwise as _mean_pairwise, outside_mask
 
 TEAMS = (("h", 0, "home (Barcelona)"), ("a", 1, "away (Athletic Club)"))
 MIN_PLAYERS = 3                  # a team statistic needs at least this many visible slots (assumption: bare minimum)
 NEAR_RADII_M = (5.0, 10.0)       # reporting radii for "players close to the ball" (descriptive, not thresholds)
-PAIR_CHUNK = 4000                # frames per block when computing pairwise distances (memory bound)
 
 _TEAM_DOC = {
     "n": "Visible track slots of the team in this frame (count; slots can be duplicated/missing, ~11 expected).",
@@ -73,26 +72,6 @@ NORMALISED_DOC = {
 
 def _stack_team(players: np.ndarray, slot_team: np.ndarray, code: int) -> np.ndarray:
     return players[:, np.flatnonzero(slot_team == code)]
-
-
-def _mean_pairwise(p: np.ndarray, seen: np.ndarray) -> np.ndarray:
-    """Mean pairwise distance among visible slots, chunked over frames. p: (n,k,2), seen: (n,k)."""
-    n, k, _ = p.shape
-    out = np.full(n, np.nan)
-    eye = np.eye(k, dtype=bool)[None]
-    for lo in range(0, n, PAIR_CHUNK):
-        hi = min(n, lo + PAIR_CHUNK)
-        blk = np.where(seen[lo:hi, :, None], p[lo:hi], 0.0)
-        diff = blk[:, :, None, :] - blk[:, None, :, :]
-        dist = np.sqrt((diff ** 2).sum(-1))
-        ok = seen[lo:hi, :, None] & seen[lo:hi, None, :] & ~eye
-        cnt = ok.sum(axis=(1, 2))
-        total = (dist * ok).sum(axis=(1, 2))
-        res = np.full(hi - lo, np.nan)
-        good = cnt > 0
-        res[good] = total[good] / cnt[good]
-        out[lo:hi] = res
-    return out
 
 
 def _windowed(a: np.ndarray, lag: int, fn) -> np.ndarray:

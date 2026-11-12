@@ -37,11 +37,16 @@ LAG = 5                                              # frames each side for the 
 OUT_RUN_EDGES_S = np.array([0.5, 2.0, 6.0])          # outside-run length: <0.5 s, 0.5-2, 2-6, >6 s
 CROWD_EDGES = np.array([0.4, 0.8, 1.2, 1.8])         # m/s over a ~1 s window: 5 buckets
 GAP_EDGE_EDGES = np.array([0.0, 2.0, 6.0, 15.0])     # m, signed: outside, 0-2, 2-6, 6-15, >15
+SHAPE_EDGES = np.array([-8.0, -3.0, 0.0, 3.0, 8.0])  # m: home minus away mean pairwise distance (EXP-005, ASSUMPTION)
 EXTRA_NSYM = {
     "out": len(OUT_RUN_EDGES_S) + 2,
     "crowd": len(CROWD_EDGES) + 1,
     "gapedge": len(GAP_EDGE_EDGES) + 1,
+    "shape": len(SHAPE_EDGES) + 1,
+    "shape_ha": len(SHAPE_EDGES) + 1,      # same symbols as "shape"; its D emission is neutral (EXP-006)
+    "shape_gap": len(SHAPE_EDGES) + 1,     # as shape_ha but only on frames WITHOUT a visible ball (EXP-007)
 }
+ALIVE_ONLY = frozenset({"shape_ha", "shape_gap"})   # streams that may only split H from A: P(sym | D) := P(sym | alive)
 ALL_EXTRA = tuple(EXTRA_NSYM)
 
 
@@ -83,6 +88,13 @@ def extract_extra(tr: Tracking, streams: Sequence[str], fps: int = FPS,
             speed = F.crowd_speed(tr.players, fps=fps)
             ok = np.isfinite(speed)
             sym[ok] = np.digitize(speed[ok], edges)
+        elif name in ("shape", "shape_ha", "shape_gap"):
+            home, away = F.team_compactness(tr.players, tr.slot_team)
+            diff = home - away
+            ok = np.isfinite(diff)
+            if name == "shape_gap":
+                ok &= ~np.isfinite(tr.ball[:, 0])
+            sym[ok] = np.digitize(diff[ok], SHAPE_EDGES)
         elif name == "gapedge":
             dist = F.gap_edge_distance(tr.ball, pitch)
             ok = np.isfinite(dist)
@@ -156,6 +168,8 @@ def fit(evidence: Evidence, labels: np.ndarray, mask: np.ndarray, switch_scale: 
         counts = np.zeros((N_STATES, EXTRA_NSYM[name]))
         sel = use & (sym >= 0)
         np.add.at(counts, (lab[sel], sym[sel]), 1)
+        if name in ALIVE_ONLY:
+            counts[2] = counts[0] + counts[1]      # neutral for D: it cannot move the alive/dead decision
         log_extra[name] = _norm_log(counts)
 
     prior = np.bincount(lab[use], minlength=N_STATES).astype(float)

@@ -52,6 +52,41 @@ def crowd_speed(players: np.ndarray, lag: int = CROWD_LAG, fps: int = FPS) -> np
     return out
 
 
+PAIR_CHUNK = 4000   # frames per block when computing pairwise distances (memory bound)
+
+
+def mean_pairwise(p: np.ndarray, seen: np.ndarray) -> np.ndarray:
+    """Mean pairwise distance among visible slots, chunked over frames. p: (n,k,2), seen: (n,k). NaN if < 2 visible."""
+    n, k, _ = p.shape
+    out = np.full(n, np.nan)
+    eye = np.eye(k, dtype=bool)[None]
+    for lo in range(0, n, PAIR_CHUNK):
+        hi = min(n, lo + PAIR_CHUNK)
+        blk = np.where(seen[lo:hi, :, None], p[lo:hi], 0.0)
+        diff = blk[:, :, None, :] - blk[:, None, :, :]
+        dist = np.sqrt((diff ** 2).sum(-1))
+        ok = seen[lo:hi, :, None] & seen[lo:hi, None, :] & ~eye
+        cnt = ok.sum(axis=(1, 2))
+        total = (dist * ok).sum(axis=(1, 2))
+        res = np.full(hi - lo, np.nan)
+        good = cnt > 0
+        res[good] = total[good] / cnt[good]
+        out[lo:hi] = res
+    return out
+
+
+def team_compactness(players: np.ndarray, slot_team: np.ndarray, min_players: int = 3) -> Tuple[np.ndarray, np.ndarray]:
+    """(home, away) mean pairwise distance per frame (m); NaN when a team has fewer than `min_players` visible slots."""
+    outs = []
+    for code in (0, 1):
+        p = players[:, np.flatnonzero(slot_team == code)]
+        seen = np.isfinite(p[:, :, 0])
+        c = mean_pairwise(p, seen)
+        c[seen.sum(axis=1) < min_players] = np.nan
+        outs.append(c)
+    return outs[0], outs[1]
+
+
 CROWD_QUANTILES = (0.2, 0.4, 0.6, 0.8)   # quintiles: assumption-free equal-share buckets per game
 
 

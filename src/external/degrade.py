@@ -35,8 +35,10 @@ def calibrated_params(**overrides) -> DegradeParams:
     competition ball-step p50/p90/p99 = 5.1/14.3/24.6 m/s, 0.23% of steps > 40 m/s, median-player step speed
     p10/p50/p90 = 0.56/1.34/3.07 m/s. Clean Metrica already sits close to these; iid per-frame noise (the
     original default) inflates them 5-10x. AR(1) noise with rho 0.999 and 0.7 glitches/min reproduce them
-    (scripts/calibrate_degrade.py). See PROVENANCE.md."""
-    base = dict(noise_corr=0.999, p_ball_glitch_per_min=0.7)
+    (scripts/calibrate_degrade.py). Ball gaps (bench v2, EXP-008): competition runs have median 10.7 s, p90 33.8 s
+    and mean ~17 s, so mean_gap_frames = 400 (geometric: median 11.1 s, p90 36.8 s). `mean_gap_frames=50` is bench v1.
+    See PROVENANCE.md."""
+    base = dict(noise_corr=0.999, p_ball_glitch_per_min=0.7, mean_gap_frames=400.0)
     base.update(overrides)
     return DegradeParams(**base)
 

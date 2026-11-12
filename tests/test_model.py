@@ -172,6 +172,18 @@ class DegradeOptionTests(unittest.TestCase):
         glitchy = degrade(clean, 7, DegradeParams(noise_corr=0.999, p_ball_glitch_per_min=2.0))
         self.assertGreater(fast(glitchy), fast(base) + 5)
 
+    def test_calibrated_gaps_match_profile_shape(self):
+        from src.external.degrade import calibrated_params
+        clean, _ = make_match(0, minutes=60)
+        tr = degrade(clean, 11, calibrated_params())
+        miss = ~np.isfinite(tr.ball[:, 0])
+        padded = np.concatenate(([0], miss.astype(np.int8), [0]))
+        d = np.diff(padded)
+        lens = (np.flatnonzero(d == -1) - np.flatnonzero(d == 1)) / FPS
+        self.assertAlmostEqual(float(miss.mean()), 0.41, delta=0.05)
+        self.assertGreater(float(np.median(lens)), 6.0)        # bench v1 had a ~1.4 s median
+        self.assertLess(float(np.median(lens)), 16.0)
+
     def test_correlated_noise_is_smoother(self):
         clean, _ = make_match(0, minutes=3)
         iid = degrade(clean, 3, DegradeParams(noise_corr=0.0))
