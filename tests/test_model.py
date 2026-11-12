@@ -110,6 +110,51 @@ class HmmStreamTests(unittest.TestCase):
             self.assertEqual(legacy.log_extra, {})
 
 
+class PoolTests(unittest.TestCase):
+    def test_concat_and_pooled_fit_sums_counts(self):
+        from src.model.hmm import concat_evidence
+        t1, g1 = _case(minutes=4, seed=0)
+        t2, g2 = _case(minutes=5, seed=1)
+        e1 = extract_evidence(t1, streams=("out", "crowd"))
+        e2 = extract_evidence(t2, streams=("out", "crowd"))
+        pooled = concat_evidence([e1, e2])
+        self.assertEqual(len(pooled.team_sym), t1.n_frames + t2.n_frames)
+        gt = np.concatenate([g1, g2])
+        p = fit(pooled, gt, gt != 3)
+        for table in p.log_extra.values():
+            np.testing.assert_allclose(np.exp(table).sum(axis=1), 1.0)
+        with self.assertRaises(ValueError):
+            concat_evidence([e1, extract_evidence(t2, streams=("out",))])
+
+
+class QuantileEdgeTests(unittest.TestCase):
+    def test_edges_give_equal_share_buckets(self):
+        tr, _ = _case(minutes=10)
+        edges = F.crowd_edges_for_game(tr.players, [(0, tr.n_frames)])
+        self.assertEqual(len(edges), 4)
+        self.assertTrue(np.all(np.diff(edges) > 0))
+        ev = extract_evidence(tr, streams=("crowd",), crowd_edges=edges)
+        sym = ev.extra["crowd"]
+        shares = [(sym[sym >= 0] == k).mean() for k in range(5)]
+        np.testing.assert_allclose(shares, 0.2, atol=0.01)
+
+    def test_edges_do_not_use_ungraded_frames(self):
+        tr, _ = _case(minutes=6)
+        n = tr.n_frames
+        slow = tr.players.copy()
+        slow[: n // 2] = slow[: n // 2, :, :][:1]               # first half frozen: speed 0 everywhere
+        frozen = Tracking(ball=tr.ball, players=slow, slot_team=tr.slot_team)
+        graded_only = F.crowd_edges_for_game(frozen.players, [(n // 2 + 100, n - 100)])
+        whole = F.crowd_edges_for_game(frozen.players, [(0, n)])
+        self.assertGreater(graded_only[0], whole[0])             # frozen half would drag the edges down if included
+
+    def test_default_edges_unchanged(self):
+        tr, _ = _case(minutes=4)
+        a = extract_evidence(tr, streams=("crowd",))
+        b = extract_evidence(tr, streams=("crowd",), crowd_edges=None)
+        np.testing.assert_array_equal(a.extra["crowd"], b.extra["crowd"])
+
+
 class DegradeOptionTests(unittest.TestCase):
     def test_defaults_unchanged_by_new_options(self):
         clean, _ = make_match(0, minutes=3)

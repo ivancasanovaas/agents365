@@ -62,8 +62,12 @@ class HmmParams:
 
 
 def extract_extra(tr: Tracking, streams: Sequence[str], fps: int = FPS,
-                  pitch: Tuple[float, float] = PITCH_M) -> Dict[str, np.ndarray]:
+                  pitch: Tuple[float, float] = PITCH_M,
+                  crowd_edges: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
+    """`crowd_edges`: bucket edges (m/s) for the crowd stream; None = the fixed absolute CROWD_EDGES.
+    Pass `features.crowd_edges_for_game(...)` to bucket by the game's own quantiles (EXP-004)."""
     n = tr.n_frames
+    edges = CROWD_EDGES if crowd_edges is None else np.asarray(crowd_edges, dtype=float)
     out: Dict[str, np.ndarray] = {}
     for name in streams:
         if name not in EXTRA_NSYM:
@@ -78,7 +82,7 @@ def extract_extra(tr: Tracking, streams: Sequence[str], fps: int = FPS,
         elif name == "crowd":
             speed = F.crowd_speed(tr.players, fps=fps)
             ok = np.isfinite(speed)
-            sym[ok] = np.digitize(speed[ok], CROWD_EDGES)
+            sym[ok] = np.digitize(speed[ok], edges)
         elif name == "gapedge":
             dist = F.gap_edge_distance(tr.ball, pitch)
             ok = np.isfinite(dist)
@@ -87,7 +91,8 @@ def extract_extra(tr: Tracking, streams: Sequence[str], fps: int = FPS,
     return out
 
 
-def extract_evidence(tr: Tracking, fps: int = FPS, streams: Sequence[str] = ()) -> Evidence:
+def extract_evidence(tr: Tracking, fps: int = FPS, streams: Sequence[str] = (),
+                     crowd_edges: Optional[np.ndarray] = None) -> Evidence:
     codes, dist = nearest_player(tr)
     team_sym = np.full(len(codes), -1, dtype=np.int64)
     seen = codes >= 0
@@ -101,7 +106,21 @@ def extract_evidence(tr: Tracking, fps: int = FPS, streams: Sequence[str] = ()) 
         ok = np.isfinite(speed)
         idx = np.arange(LAG, len(ball) - LAG)
         speed_sym[idx[ok]] = np.digitize(speed[ok], SPEED_EDGES)
-    return Evidence(team_sym, speed_sym, extract_extra(tr, streams, fps) if streams else {})
+    return Evidence(team_sym, speed_sym,
+                    extract_extra(tr, streams, fps, crowd_edges=crowd_edges) if streams else {})
+
+
+def concat_evidence(parts: Sequence[Evidence]) -> Evidence:
+    """Concatenate the evidence of several games (to fit one model on pooled external games). Streams must match.
+    The single transition counted across a game boundary is negligible."""
+    keys = set(parts[0].extra)
+    if any(set(p.extra) != keys for p in parts):
+        raise ValueError("all parts must carry the same extra streams")
+    return Evidence(
+        np.concatenate([p.team_sym for p in parts]),
+        np.concatenate([p.speed_sym for p in parts]),
+        {k: np.concatenate([p.extra[k] for p in parts]) for k in keys},
+    )
 
 
 def _norm_log(counts: np.ndarray, alpha: float = 1.0) -> np.ndarray:

@@ -52,6 +52,23 @@ def crowd_speed(players: np.ndarray, lag: int = CROWD_LAG, fps: int = FPS) -> np
     return out
 
 
+CROWD_QUANTILES = (0.2, 0.4, 0.6, 0.8)   # quintiles: assumption-free equal-share buckets per game
+
+
+def crowd_edges_for_game(players: np.ndarray, runs, quantiles=CROWD_QUANTILES, lag: int = CROWD_LAG,
+                         fps: int = FPS) -> np.ndarray:
+    """Per-game bucket edges for the crowd-speed stream: the given quantiles of this game's own crowd speed over its
+    graded frames. Removes differences in overall tempo between games (domain shift) without using any label."""
+    speed = crowd_speed(players, lag=lag, fps=fps)
+    keep = np.zeros(len(speed), dtype=bool)
+    for lo, hi in runs:
+        keep[lo:hi] = True
+    vals = speed[keep & np.isfinite(speed)]
+    if vals.size == 0:
+        raise ValueError("no finite crowd speed inside the graded runs")
+    return np.quantile(vals, quantiles)
+
+
 def signed_edge_distance(xy: np.ndarray, pitch: Tuple[float, float] = PITCH_M) -> np.ndarray:
     """Signed distance (m) to the nearest touch/goal line; negative = outside."""
     length, width = pitch
