@@ -17,7 +17,7 @@ to the competition match or its public ground truth.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
@@ -133,6 +133,15 @@ def concat_evidence(parts: Sequence[Evidence]) -> Evidence:
         np.concatenate([p.speed_sym for p in parts]),
         {k: np.concatenate([p.extra[k] for p in parts]) for k in keys},
     )
+
+
+def scale_ha(params: HmmParams, factor: float) -> HmmParams:
+    """Scale ONLY the H<->A transition probabilities by `factor` (rows renormalised); H<->D, D<->A untouched."""
+    p = np.exp(params.log_trans).copy()
+    p[0, 1] *= factor
+    p[1, 0] *= factor
+    p /= p.sum(axis=1, keepdims=True)
+    return replace(params, log_trans=np.log(p))
 
 
 def _norm_log(counts: np.ndarray, alpha: float = 1.0) -> np.ndarray:

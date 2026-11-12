@@ -110,6 +110,47 @@ class HmmStreamTests(unittest.TestCase):
             self.assertEqual(legacy.log_extra, {})
 
 
+class DurationTests(unittest.TestCase):
+    def test_scale_ha_only_touches_ha_transitions(self):
+        from src.model.hmm import scale_ha
+        tr, gt = _case(minutes=6)
+        p = fit(extract_evidence(tr), gt, gt != 3)
+        q = scale_ha(p, 0.25)
+        a, b = np.exp(p.log_trans), np.exp(q.log_trans)
+        np.testing.assert_allclose(b.sum(axis=1), 1.0)
+        self.assertLess(b[0, 1], a[0, 1])
+        self.assertLess(b[1, 0], a[1, 0])
+        # ratios among the untouched entries of a row are preserved (H row: stay vs go to D)
+        np.testing.assert_allclose(b[0, 0] / b[0, 2], a[0, 0] / a[0, 2])
+        np.testing.assert_allclose(scale_ha(p, 1.0).log_trans, p.log_trans)
+
+    def test_min_duration_filter_cases(self):
+        from src.model.postfilter import min_duration_filter, spell_lengths
+        H, A, D = 0, 1, 2
+        seq = np.array([H] * 10 + [A] * 2 + [H] * 10 + [D] * 5 + [A] * 2 + [D] * 5 + [A] * 8 + [A] * 0, dtype=np.int8)
+        out = min_duration_filter(seq, 5, [(0, len(seq))])
+        self.assertEqual(out[10:12].tolist(), [H, H])                 # short A between H runs absorbed by previous
+        self.assertEqual(out[27:29].tolist(), [D, D])                 # short A between two D becomes D
+        self.assertEqual(out[34:].tolist(), [A] * 8)                  # long runs untouched
+        self.assertTrue(spell_lengths(out, [(0, len(out))]).min() >= 5)
+
+    def test_filter_leaves_outside_runs_and_does_not_mutate(self):
+        from src.model.postfilter import min_duration_filter
+        seq = np.array([3, 3, 0, 1, 0, 0, 0, 0, 3, 3], dtype=np.int8)
+        before = seq.copy()
+        out = min_duration_filter(seq, 3, [(2, 8)])
+        np.testing.assert_array_equal(seq, before)
+        self.assertEqual(out[:2].tolist(), [3, 3])
+        self.assertEqual(out[8:].tolist(), [3, 3])
+        self.assertEqual(out[2:8].tolist(), [0] * 6)
+
+    def test_duration_quantile_from_labels(self):
+        from src.model.postfilter import spell_duration_quantile
+        gt = np.array([0] * 10 + [2] * 3 + [1] * 30 + [0] * 20, dtype=np.int8)
+        q = spell_duration_quantile(gt, [(0, len(gt))], 0.5)
+        self.assertEqual(q, 20)                                       # lengths 10, 30, 20 -> median 20
+
+
 class PoolTests(unittest.TestCase):
     def test_concat_and_pooled_fit_sums_counts(self):
         from src.model.hmm import concat_evidence
